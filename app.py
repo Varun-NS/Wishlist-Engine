@@ -35,7 +35,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Custom CSS for an ultra-clean, modern, human-friendly UI
+# Custom CSS for an ultra-clean, soothing Myntra-inspired UI
 st.markdown(
     """
 <style>
@@ -43,11 +43,13 @@ st.markdown(
 
 html, body, .stMarkdown, p, label {
     font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    color: #282C3F;
 }
 
 h1, h2, h3, h4, h5, h6, .header-title, [data-testid="stMetricValue"] {
     font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif !important;
     letter-spacing: -0.01em;
+    color: #282C3F;
 }
 
 /* Protect Streamlit Material Icons & SVG from font override */
@@ -55,57 +57,73 @@ h1, h2, h3, h4, h5, h6, .header-title, [data-testid="stMetricValue"] {
     font-family: "Material Symbols Rounded", "Material Icons", sans-serif !important;
 }
 
-/* App Background & Header */
-.main .block-container {
-    padding-top: 2rem;
-    padding-bottom: 3rem;
-    max-width: 1300px;
+/* App Background & Container */
+.stApp {
+    background-color: #F9F9FB;
 }
 
-/* Custom Header Bar */
+.main .block-container {
+    padding-top: 1.75rem;
+    padding-bottom: 3rem;
+    max-width: 1280px;
+}
+
+/* Myntra-Themed Header Bar */
 .header-container {
-    background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: linear-gradient(135deg, #FFF0F4 0%, #FFFFFF 100%);
+    border: 1px solid #FFE0E6;
     border-radius: 16px;
     padding: 1.5rem 2rem;
-    margin-bottom: 2rem;
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+    margin-bottom: 1.75rem;
+    box-shadow: 0 4px 20px -2px rgba(255, 63, 108, 0.06);
+    position: relative;
+    overflow: hidden;
+}
+.header-container::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 6px;
+    height: 100%;
+    background: linear-gradient(180deg, #FF3F6C, #FF6B35);
 }
 .header-title {
-    font-size: 2.1rem;
+    font-size: 2.15rem;
     font-weight: 800;
     letter-spacing: -0.02em;
-    background: linear-gradient(90deg, #F8FAFC, #38BDF8, #818CF8);
+    background: linear-gradient(90deg, #FF3F6C 0%, #FF6B35 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     margin: 0;
 }
 .header-subtitle {
-    color: #94A3B8;
+    color: #535766;
     font-size: 0.95rem;
     margin-top: 0.35rem;
+    font-weight: 400;
 }
 
 /* Metric Cards */
 [data-testid="stMetricValue"] {
     font-size: 2.1rem !important;
     font-weight: 800 !important;
-    color: #F8FAFC !important;
+    color: #282C3F !important;
     letter-spacing: -0.02em;
 }
 [data-testid="stMetricLabel"] {
-    font-size: 0.85rem !important;
-    font-weight: 600 !important;
-    color: #94A3B8 !important;
+    font-size: 0.82rem !important;
+    font-weight: 700 !important;
+    color: #686B78 !important;
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
 [data-testid="metric-container"] {
-    background: #161B22 !important;
+    background: #FFFFFF !important;
     border-radius: 14px !important;
     padding: 1.25rem 1.5rem !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+    border: 1px solid #EAEAEC !important;
+    box-shadow: 0 2px 10px rgba(40, 44, 63, 0.04) !important;
     position: relative;
     overflow: hidden;
 }
@@ -115,95 +133,98 @@ h1, h2, h3, h4, h5, h6, .header-title, [data-testid="stMetricValue"] {
     top: 0;
     left: 0;
     right: 0;
-    height: 3px;
-    background: linear-gradient(90deg, #6366F1, #38BDF8);
+    height: 3.5px;
+    background: linear-gradient(90deg, #FF3F6C, #FF758F);
 }
 
 /* Executive Alert Box */
 .exec-banner {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(56, 189, 248, 0.08) 100%);
-    border: 1px solid rgba(99, 102, 241, 0.3);
-    border-left: 4px solid #6366F1;
+    background: linear-gradient(135deg, #FFF5F7 0%, #FFFFFF 100%);
+    border: 1px solid #FFCCD7;
+    border-left: 4.5px solid #FF3F6C;
     border-radius: 12px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 1.5rem;
+    box-shadow: 0 2px 10px rgba(255, 63, 108, 0.04);
 }
 .exec-banner h4 {
-    color: #38BDF8;
+    color: #E11B68;
     margin: 0 0 0.4rem 0;
     font-size: 1.05rem;
     font-weight: 700;
 }
 .exec-banner p {
-    color: #CBD5E1;
+    color: #282C3F;
     margin: 0;
     font-size: 0.92rem;
-    line-height: 1.5;
+    line-height: 1.6;
 }
 
-/* Insight Cards */
+/* Pillar Insight Cards */
 .pillar-card {
-    background: #161B22;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #FFFFFF;
+    border: 1px solid #EAEAEC;
     border-radius: 14px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 1rem;
+    box-shadow: 0 2px 10px rgba(40, 44, 63, 0.04);
 }
 .pillar-card h4 {
-    color: #38BDF8;
+    color: #E11B68;
     margin: 0 0 0.5rem 0;
-    font-size: 1.1rem;
+    font-size: 1.08rem;
     font-weight: 700;
 }
 .pillar-card p, .pillar-card li {
-    color: #CBD5E1;
+    color: #3E4152;
     font-size: 0.92rem;
-    line-height: 1.55;
+    line-height: 1.6;
 }
 
 /* Tabs Navigation */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 0.75rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    padding-bottom: 0.5rem;
+    gap: 0.6rem;
+    border-bottom: 2px solid #EAEAEC;
+    padding-bottom: 0.4rem;
     margin-bottom: 1.5rem;
 }
 .stTabs [data-baseweb="tab"] {
-    height: 44px;
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 10px;
-    padding: 0.5rem 1.1rem;
+    height: 42px;
+    background: #F4F4F6;
+    border-radius: 8px;
+    padding: 0.45rem 1.1rem;
     font-weight: 600;
-    color: #94A3B8;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    color: #535766;
+    border: 1px solid transparent;
     transition: all 0.2s ease;
 }
 .stTabs [data-baseweb="tab"]:hover {
-    color: #F8FAFC;
-    background: rgba(255, 255, 255, 0.07);
+    color: #282C3F;
+    background: #EBEBED;
 }
 .stTabs [aria-selected="true"] {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(56, 189, 248, 0.2) 100%) !important;
-    color: #38BDF8 !important;
-    border: 1px solid rgba(56, 189, 248, 0.4) !important;
+    background: #FFFFFF !important;
+    color: #FF3F6C !important;
+    border: 1px solid #FFCCD7 !important;
+    box-shadow: 0 2px 8px rgba(255, 63, 108, 0.1) !important;
 }
 
 /* Evidence Cards */
 .evidence-card {
-    background: #161B22;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #FFFFFF;
+    border: 1px solid #EAEAEC;
     border-radius: 14px;
     padding: 1.25rem;
     margin-bottom: 1rem;
     transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 2px 8px rgba(40, 44, 63, 0.04);
     display: flex;
     flex-direction: column;
     height: 100%;
 }
 .evidence-card:hover {
-    border-color: rgba(99, 102, 241, 0.4);
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    border-color: #FFCCD7;
+    box-shadow: 0 6px 18px rgba(255, 63, 108, 0.08);
     transform: translateY(-2px);
 }
 .evidence-header {
@@ -217,47 +238,49 @@ h1, h2, h3, h4, h5, h6, .header-title, [data-testid="stMetricValue"] {
 .badge {
     display: inline-flex;
     align-items: center;
-    padding: 0.25rem 0.6rem;
+    padding: 0.25rem 0.55rem;
     border-radius: 6px;
     font-size: 0.75rem;
     font-weight: 600;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.01em;
 }
-.badge-ios { background: rgba(56, 189, 248, 0.15); color: #38BDF8; border: 1px solid rgba(56, 189, 248, 0.3); }
-.badge-android { background: rgba(52, 211, 153, 0.15); color: #34D399; border: 1px solid rgba(52, 211, 153, 0.3); }
-.badge-youtube { background: rgba(248, 113, 113, 0.15); color: #F87171; border: 1px solid rgba(248, 113, 113, 0.3); }
-.badge-manual { background: rgba(167, 139, 250, 0.15); color: #A78BFA; border: 1px solid rgba(167, 139, 250, 0.3); }
+.badge-ios { background: #EFF6FF; color: #1D4ED8; border: 1px solid #BFDBFE; }
+.badge-android { background: #F0FDF4; color: #15803D; border: 1px solid #BBF7D0; }
+.badge-youtube { background: #FEF2F2; color: #B91C1C; border: 1px solid #FECACA; }
+.badge-manual { background: #FAF5FF; color: #7E22CE; border: 1px solid #E9D5FF; }
 
-.badge-sev-high { background: rgba(244, 63, 94, 0.15); color: #FB7185; border: 1px solid rgba(244, 63, 94, 0.3); }
-.badge-sev-med { background: rgba(245, 158, 11, 0.15); color: #FBBF24; border: 1px solid rgba(245, 158, 11, 0.3); }
-.badge-sev-low { background: rgba(100, 116, 139, 0.2); color: #94A3B8; border: 1px solid rgba(100, 116, 139, 0.3); }
+.badge-sev-high { background: #FFF1F2; color: #BE123C; border: 1px solid #FFE4E6; }
+.badge-sev-med { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
+.badge-sev-low { background: #F8FAFC; color: #475569; border: 1px solid #E2E8F0; }
 
 .evidence-quote {
-    font-size: 0.95rem;
-    color: #F1F5F9;
-    line-height: 1.55;
+    font-size: 0.93rem;
+    color: #282C3F;
+    line-height: 1.6;
     font-style: italic;
     margin-bottom: 0.85rem;
     flex-grow: 1;
     position: relative;
-    padding-left: 1rem;
-    border-left: 3px solid #6366F1;
+    padding: 0.65rem 0.9rem;
+    background: #FAF9FA;
+    border-left: 3.5px solid #FF3F6C;
+    border-radius: 0 6px 6px 0;
 }
 .evidence-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding-top: 0.75rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    border-top: 1px solid #F0F0F2;
     font-size: 0.8rem;
-    color: #64748B;
+    color: #686B78;
     flex-wrap: wrap;
     gap: 0.5rem;
 }
 .workaround-tag {
-    background: rgba(99, 102, 241, 0.15);
-    color: #A5B4FC;
-    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: #FFF0F4;
+    color: #E11B68;
+    border: 1px solid #FFCCD7;
     border-radius: 6px;
     padding: 0.25rem 0.5rem;
     font-size: 0.78rem;
@@ -268,22 +291,23 @@ h1, h2, h3, h4, h5, h6, .header-title, [data-testid="stMetricValue"] {
 
 /* Sidebar Custom Styling */
 section[data-testid="stSidebar"] {
-    background-color: #0B0F17 !important;
-    border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background-color: #FFFFFF !important;
+    border-right: 1px solid #EAEAEC !important;
 }
 
-/* Buttons */
+/* Primary Action Buttons */
 button[kind="primary"] {
-    background: linear-gradient(135deg, #6366F1 0%, #4F46E5 100%) !important;
+    background: linear-gradient(135deg, #FF3F6C 0%, #E11B68 100%) !important;
     color: #FFFFFF !important;
     border: none !important;
     border-radius: 8px !important;
     padding: 0.5rem 1.25rem !important;
     font-weight: 600 !important;
-    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3) !important;
+    box-shadow: 0 3px 12px rgba(255, 63, 108, 0.25) !important;
+    transition: all 0.2s ease;
 }
 button[kind="primary"]:hover {
-    box-shadow: 0 6px 18px rgba(99, 102, 241, 0.5) !important;
+    box-shadow: 0 5px 16px rgba(255, 63, 108, 0.4) !important;
     transform: translateY(-1px);
 }
 </style>
@@ -493,15 +517,15 @@ with tab_overview:
             y="Motive",
             orientation="h",
             color="Count",
-            color_continuous_scale=[[0, "#312E81"], [0.5, "#4F46E5"], [1, "#38BDF8"]],
+            color_continuous_scale=[[0, "#FFCCD7"], [0.5, "#FF758F"], [1, "#FF3F6C"]],
         )
         fig_motive.update_layout(
             showlegend=False,
             margin=dict(l=10, r=10, t=10, b=10),
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94A3B8", family="DM Sans, sans-serif"),
-            xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)"),
+            font=dict(color="#282C3F", family="DM Sans, sans-serif"),
+            xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
             yaxis=dict(categoryorder="total ascending", showgrid=False),
             height=320,
         )
@@ -520,15 +544,15 @@ with tab_overview:
             y="Blocker",
             orientation="h",
             color="Count",
-            color_continuous_scale=[[0, "#831843"], [0.5, "#BE185D"], [1, "#FB7185"]],
+            color_continuous_scale=[[0, "#FED7AA"], [0.5, "#FB923C"], [1, "#EA580C"]],
         )
         fig_blocker.update_layout(
             showlegend=False,
             margin=dict(l=10, r=10, t=10, b=10),
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94A3B8", family="DM Sans, sans-serif"),
-            xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)"),
+            font=dict(color="#282C3F", family="DM Sans, sans-serif"),
+            xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
             yaxis=dict(categoryorder="total ascending", showgrid=False),
             height=320,
         )
@@ -585,16 +609,16 @@ with tab_overview:
             y="% Share",
             color="Platform",
             barmode="group",
-            color_discrete_map={"iOS": "#38BDF8", "Android": "#34D399", "YouTube": "#F87171"},
+            color_discrete_map={"iOS": "#3B82F6", "Android": "#10B981", "YouTube": "#EF4444"},
         )
         fig_plat.update_layout(
             margin=dict(l=10, r=10, t=20, b=10),
             plot_bgcolor="rgba(0,0,0,0)",
             paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#94A3B8", family="DM Sans, sans-serif"),
+            font=dict(color="#282C3F", family="DM Sans, sans-serif"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             xaxis=dict(showgrid=False),
-            yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)", title="% of Platform Corpus"),
+            yaxis=dict(showgrid=True, gridcolor="#EAEAEC", title="% of Platform Corpus"),
             height=380,
         )
         st.plotly_chart(fig_plat, use_container_width=True)
@@ -632,16 +656,16 @@ with tab_blueprint:
                 y="Motive Label",
                 orientation="h",
                 color="Share %",
-                color_continuous_scale=[[0, "#312E81"], [1, "#38BDF8"]],
+                color_continuous_scale=[[0, "#FFCCD7"], [1, "#FF3F6C"]],
             )
             fig_p1.update_layout(
                 height=300,
                 margin=dict(l=10, r=20, t=10, b=10),
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94A3B8", family="DM Sans, sans-serif"),
+                font=dict(color="#282C3F", family="DM Sans, sans-serif"),
                 yaxis=dict(categoryorder="total ascending", showgrid=False),
-                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)"),
+                xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
                 showlegend=False,
             )
             st.plotly_chart(fig_p1, use_container_width=True)
@@ -673,13 +697,13 @@ with tab_blueprint:
                 names="Label",
                 values="Count",
                 hole=0.45,
-                color_discrete_sequence=["#38BDF8", "#818CF8", "#F472B6", "#34D399", "#FBBF24"],
+                color_discrete_sequence=["#FF3F6C", "#FF8A5B", "#F59E0B", "#10B981", "#6366F1"],
             )
             fig_p2.update_layout(
                 height=300,
                 margin=dict(l=10, r=10, t=10, b=10),
                 paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94A3B8", family="DM Sans, sans-serif"),
+                font=dict(color="#282C3F", family="DM Sans, sans-serif"),
             )
             st.plotly_chart(fig_p2, use_container_width=True)
 
@@ -711,16 +735,16 @@ with tab_blueprint:
                 y="Channel Name",
                 orientation="h",
                 color="Count",
-                color_continuous_scale=[[0, "#4338CA"], [1, "#06B6D4"]],
+                color_continuous_scale=[[0, "#FF8A5B"], [1, "#FF3F6C"]],
             )
             fig_p3.update_layout(
                 height=300,
                 margin=dict(l=10, r=20, t=10, b=10),
                 plot_bgcolor="rgba(0,0,0,0)",
                 paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#94A3B8", family="DM Sans, sans-serif"),
+                font=dict(color="#282C3F", family="DM Sans, sans-serif"),
                 yaxis=dict(categoryorder="total ascending", showgrid=False),
-                xaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)"),
+                xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
                 showlegend=False,
             )
             st.plotly_chart(fig_p3, use_container_width=True)
@@ -1027,9 +1051,9 @@ with tab_evidence:
         for i, (wa_text, wa_count) in enumerate(workarounds.items()):
             with w_cols[i % 3]:
                 st.markdown(
-                    f'<div style="background: #161B22; border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 0.9rem; margin-bottom: 0.75rem;">'
-                    f'<div style="font-size: 0.88rem; color: #E2E8F0; font-weight: 500;">"{html.escape(wa_text)}"</div>'
-                    f'<div style="font-size: 0.75rem; color: #38BDF8; margin-top: 0.4rem; font-weight: 600;">Mentioned {wa_count} times</div>'
+                    f'<div style="background: #FFFFFF; border: 1px solid #EAEAEC; border-radius: 10px; padding: 0.9rem; margin-bottom: 0.75rem; box-shadow: 0 2px 8px rgba(40, 44, 63, 0.04);">'
+                    f'<div style="font-size: 0.88rem; color: #282C3F; font-weight: 500;">"{html.escape(wa_text)}"</div>'
+                    f'<div style="font-size: 0.75rem; color: #FF3F6C; margin-top: 0.4rem; font-weight: 700;">Mentioned {wa_count} times</div>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
