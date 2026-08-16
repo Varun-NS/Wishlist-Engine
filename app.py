@@ -1,332 +1,832 @@
 """
 app.py
 ------
-The executive discovery engine interface.
+Wishlist Discovery Engine - executive interface.
 
-Tabs:
-  1. 📊 Executive Overview - High-level metrics, blocker distributions, and ranked opportunity matrix.
-  2. 🎯 Strategic Deep Dives - 4 Clean Pillar Dashboards answering the core brief questions.
-  3. 🤖 Ask the Corpus (AI Copilot) - Interactive Q&A engine where anyone can ask custom research questions.
-  4. 💬 Voice of Customer  - Rich, structured evidence matrix with search, filters, and verbatim cards.
-  5. ⚡ Live Extractor      - Real-time LLM classification playground.
-  6. 🔬 Methodology        - Pipeline architecture and taxonomy definitions.
+Design system
+  Surface   Apple-style frosted glass panels: 72-80% white over a soft gradient
+            backdrop, 30px backdrop blur, 180% saturation, 22px radius. Opacity is
+            deliberately high - Apple's own materials are near-opaque, and that is
+            what keeps text legible on glass.
+  Palette   Myntra light - rose #FF3F6C accent, ink #1C1E2E, muted #5C6076
+            (every text colour clears 4.5:1 on the panel surface)
+  Type      Outfit (headings) + DM Sans (body) on a 17px base, 1.7 line-height
+  Icons     Material Symbols via Streamlit's `:material/...:` syntax + inline SVG.
+            No emoji used as an icon.
+  Charts    Single-hue magnitude bars with direct value labels; a validated 3-hue
+            categorical set (#2563A8 / #0F8A6E / #B26B00) reserved for platform identity.
+
+Structure
+  Every section of every tab lives inside its own titled glass panel, so the page
+  reads as a stack of discrete, self-describing parts rather than a continuous wall.
+
+Navigation (5 top-level tabs, no nested tab layer)
+  1. Overview          - headline, key numbers, motives, blockers, ranked matrix.
+  2. Deep dives        - 4 strategic pillars behind one pill selector.
+  3. AI copilot        - ask any question across the corpus.
+  4. Voice of customer - verbatim evidence with filters and workarounds.
+  5. How it works      - live extractor playground + methodology.
 """
 
 import html
-import json
 import os
 import re
 import sys
 import uuid
+from contextlib import contextmanager
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
-from taxonomy import BUCKETS, NO_INTENT, OUT_OF_SCOPE, bucket_label, is_addressable
+from taxonomy import BUCKETS, bucket_label, is_addressable
 
-# Page configuration
 st.set_page_config(
-    page_title="Wishlist Discovery Engine | Executive Insights & AI Copilot",
+    page_title="Wishlist Discovery Engine",
     page_icon="🛍️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto" keeps the filter rail open on desktop but collapsed on phones,
+    # where an expanded sidebar would sit on top of the content.
+    initial_sidebar_state="auto",
 )
 
-# Custom CSS for an ultra-clean, soothing Myntra-inspired UI
+# ------------------------------------------------------------------
+# Design tokens (kept in sync with the CSS custom properties below)
+# ------------------------------------------------------------------
+BRAND = "#FF3F6C"       # Myntra rose - accents, CTAs
+BRAND_INK = "#D92B58"   # accessible rose for data marks and small text
+INK = "#1C1E2E"         # headings
+BODY = "#33364A"        # body copy
+MUTED = "#5C6076"       # captions, axis labels (5.9:1 on the panel surface)
+LINE = "#E3E4EC"        # borders, gridlines
+
+# Categorical hues for platform identity. Validated (light surface, all-pairs):
+# CVD delta-E 9.9, normal-vision delta-E 17.0, contrast >= 3:1.
+PLATFORM_COLORS = {"iOS": "#2563A8", "Android": "#0F8A6E", "YouTube": "#B26B00"}
+
+# The store each platform key actually refers to, named the way the store is.
+PLATFORM_NAMES = {"iOS": "App Store", "Android": "Google Play", "YouTube": "YouTube"}
+
+CHART_FONT = "DM Sans, -apple-system, BlinkMacSystemFont, sans-serif"
+
 st.markdown(
     """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Outfit:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Outfit:wght@500;600;700&display=swap');
 
-html, body, .stMarkdown, p, label {
+:root {
+    --brand: #FF3F6C;
+    --brand-ink: #D92B58;
+    --brand-soft: rgba(255, 63, 108, .09);
+    --brand-line: rgba(255, 63, 108, .26);
+    --ink: #1C1E2E;
+    --body: #33364A;
+    --muted: #5C6076;
+    --line: #E3E4EC;
+    --line-soft: rgba(28, 30, 46, .07);
+
+    /* Apple-style material: high opacity + heavy blur = legible glass */
+    --glass: rgba(255, 255, 255, .74);
+    --glass-strong: rgba(255, 255, 255, .86);
+    --glass-blur: saturate(180%) blur(30px);
+    --glass-ring: 0 0 0 1px rgba(28, 30, 46, .06);
+    --glass-edge: inset 0 1px 0 rgba(255, 255, 255, .85);
+    --glass-shadow: 0 10px 34px -12px rgba(28, 30, 46, .18);
+
+    --radius-xl: 22px;
+    --radius-lg: 16px;
+    --radius-md: 11px;
+    --radius-sm: 7px;
+    --ease: 220ms cubic-bezier(.32, .72, 0, 1);
+}
+
+/* ---------- Base typography: 17px base for comfortable reading ---------- */
+html { font-size: 17px; }
+
+html, body, .stMarkdown, p, li, label, input, textarea, button, div[data-baseweb] {
     font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    color: #282C3F;
+    -webkit-font-smoothing: antialiased;
+}
+.stMarkdown p, .stMarkdown li { color: var(--body); line-height: 1.7; font-size: 1rem; }
+.stMarkdown li { margin-bottom: .35rem; }
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: 'Outfit', -apple-system, sans-serif !important;
+    color: var(--ink) !important;
+    letter-spacing: -0.018em;
 }
 
-h1, h2, h3, h4, h5, h6, .header-title, [data-testid="stMetricValue"] {
-    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    letter-spacing: -0.01em;
-    color: #282C3F;
+/* Never let the body font override Streamlit's icon font */
+[data-testid*="Icon"], [data-testid="stExpanderToggleIcon"],
+[class*="material-symbols"], [class*="material-icons"], span[data-testid="stIconMaterial"] {
+    font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
 }
 
-/* Protect Streamlit Material Icons & SVG from font override */
-[data-testid*="Icon"], [data-testid="stExpanderToggleIcon"], [class*="material"], svg, i {
-    font-family: "Material Symbols Rounded", "Material Icons", sans-serif !important;
-}
-
-/* App Background & Container */
+/* ---------- Canvas: a soft gradient field for the glass to refract ---------- */
 .stApp {
-    background-color: #F9F9FB;
+    background-color: #EDEEF3;
+    background-image:
+        radial-gradient(58rem 40rem at 8% -10%, rgba(255, 63, 108, .16), transparent 62%),
+        radial-gradient(52rem 38rem at 96% 2%,  rgba(96, 130, 255, .14), transparent 64%),
+        radial-gradient(46rem 34rem at 52% 108%, rgba(255, 156, 92, .13), transparent 62%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
 }
-
 .main .block-container {
-    padding-top: 1.75rem;
-    padding-bottom: 3rem;
-    max-width: 1280px;
+    padding-top: 2.25rem;
+    padding-bottom: 5rem;
+    max-width: 1200px;
 }
 
-/* Myntra-Themed Header Bar */
-.header-container {
-    background: linear-gradient(135deg, #FFF0F4 0%, #FFFFFF 100%);
-    border: 1px solid #FFE0E6;
-    border-radius: 16px;
-    padding: 1.5rem 2rem;
-    margin-bottom: 1.75rem;
-    box-shadow: 0 4px 20px -2px rgba(255, 63, 108, 0.06);
-    position: relative;
-    overflow: hidden;
+/* ---------- THE GLASS PANEL ----------
+   Every st.container(key="p_...") becomes a discrete frosted section.       */
+[class*="st-key-p_"] {
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border-radius: var(--radius-xl);
+    padding: 1.6rem 1.75rem !important;
+    margin-bottom: 1.35rem;
+    box-shadow: var(--glass-ring), var(--glass-edge), var(--glass-shadow);
 }
-.header-container::after {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 6px;
-    height: 100%;
-    background: linear-gradient(180deg, #FF3F6C, #FF6B35);
-}
-.header-title {
-    font-size: 2.15rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    background: linear-gradient(90deg, #FF3F6C 0%, #FF6B35 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin: 0;
-}
-.header-subtitle {
-    color: #535766;
-    font-size: 0.95rem;
-    margin-top: 0.35rem;
-    font-weight: 400;
-}
+/* Panels sitting inside a column fill its height so a side-by-side row stays even.
+   Streamlit nests them as stColumn > stVerticalBlock > stLayoutWrapper > panel. */
+[data-testid="stColumn"] > [data-testid="stVerticalBlock"] { height: 100%; }
+[data-testid="stColumn"] [data-testid="stLayoutWrapper"]:has(> [class*="st-key-p_"]) { height: 100%; }
+[data-testid="stColumn"] [class*="st-key-p_"] { height: 100%; margin-bottom: 0; }
 
-/* Metric Cards */
-[data-testid="stMetricValue"] {
-    font-size: 2.1rem !important;
-    font-weight: 800 !important;
-    color: #282C3F !important;
-    letter-spacing: -0.02em;
+/* Panel header: icon chip + title + one line saying what the section is */
+.panel-head {
+    display: flex; align-items: flex-start; gap: .8rem;
+    padding-bottom: 1.05rem; margin-bottom: 1.15rem;
+    border-bottom: 1px solid var(--line-soft);
 }
-[data-testid="stMetricLabel"] {
-    font-size: 0.82rem !important;
-    font-weight: 700 !important;
-    color: #686B78 !important;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+.panel-head.bare { border-bottom: none; padding-bottom: 0; margin-bottom: 1.1rem; }
+.panel-icon {
+    width: 34px; height: 34px; flex-shrink: 0;
+    display: grid; place-items: center;
+    border-radius: 10px;
+    background: var(--brand-soft);
+    color: var(--brand-ink);
+    box-shadow: inset 0 0 0 1px var(--brand-line);
 }
-[data-testid="metric-container"] {
-    background: #FFFFFF !important;
-    border-radius: 14px !important;
-    padding: 1.25rem 1.5rem !important;
-    border: 1px solid #EAEAEC !important;
-    box-shadow: 0 2px 10px rgba(40, 44, 63, 0.04) !important;
-    position: relative;
-    overflow: hidden;
+.panel-title {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.2rem; font-weight: 600; color: var(--ink);
+    line-height: 1.3; letter-spacing: -.015em;
 }
-[data-testid="metric-container"]::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3.5px;
-    background: linear-gradient(90deg, #FF3F6C, #FF758F);
-}
+.panel-desc { font-size: .93rem; color: var(--muted); margin-top: .2rem; line-height: 1.55; }
 
-/* Executive Alert Box */
-.exec-banner {
-    background: linear-gradient(135deg, #FFF5F7 0%, #FFFFFF 100%);
-    border: 1px solid #FFCCD7;
-    border-left: 4.5px solid #FF3F6C;
-    border-radius: 12px;
-    padding: 1.25rem 1.5rem;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 2px 10px rgba(255, 63, 108, 0.04);
-}
-.exec-banner h4 {
-    color: #E11B68;
-    margin: 0 0 0.4rem 0;
-    font-size: 1.05rem;
-    font-weight: 700;
-}
-.exec-banner p {
-    color: #282C3F;
-    margin: 0;
-    font-size: 0.92rem;
-    line-height: 1.6;
-}
-
-/* Pillar Insight Cards */
-.pillar-card {
-    background: #FFFFFF;
-    border: 1px solid #EAEAEC;
-    border-radius: 14px;
-    padding: 1.25rem 1.5rem;
-    margin-bottom: 1rem;
-    box-shadow: 0 2px 10px rgba(40, 44, 63, 0.04);
-}
-.pillar-card h4 {
-    color: #E11B68;
-    margin: 0 0 0.5rem 0;
-    font-size: 1.08rem;
-    font-weight: 700;
-}
-.pillar-card p, .pillar-card li {
-    color: #3E4152;
-    font-size: 0.92rem;
-    line-height: 1.6;
-}
-
-/* Tabs Navigation */
-.stTabs [data-baseweb="tab-list"] {
-    gap: 0.6rem;
-    border-bottom: 2px solid #EAEAEC;
-    padding-bottom: 0.4rem;
+/* ---------- Header ---------- */
+.app-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1.5rem; flex-wrap: wrap;
     margin-bottom: 1.5rem;
 }
-.stTabs [data-baseweb="tab"] {
-    height: 42px;
-    background: #F4F4F6;
-    border-radius: 8px;
-    padding: 0.45rem 1.1rem;
-    font-weight: 600;
-    color: #535766;
-    border: 1px solid transparent;
-    transition: all 0.2s ease;
+.app-header .brand { display: flex; align-items: center; gap: 1rem; }
+.app-header .brand-mark {
+    width: 50px; height: 50px; flex-shrink: 0;
+    display: grid; place-items: center;
+    border-radius: 15px;
+    background: var(--glass-strong);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    color: var(--brand-ink);
+    box-shadow: var(--glass-ring), var(--glass-edge), 0 6px 18px -8px rgba(28,30,46,.25);
 }
-.stTabs [data-baseweb="tab"]:hover {
-    color: #282C3F;
-    background: #EBEBED;
+.app-header h1 { font-size: 1.75rem; font-weight: 700; margin: 0; line-height: 1.15; }
+.app-header .sub { font-size: .97rem; color: var(--muted); margin-top: .25rem; }
+.source-strip { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.source-chip {
+    display: inline-flex; align-items: center; gap: .45rem;
+    padding: .4rem .8rem; border-radius: 999px;
+    background: var(--glass-strong);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow: var(--glass-ring), var(--glass-edge);
+    color: var(--body); font-weight: 500; font-size: .87rem;
 }
-.stTabs [aria-selected="true"] {
-    background: #FFFFFF !important;
-    color: #FF3F6C !important;
-    border: 1px solid #FFCCD7 !important;
-    box-shadow: 0 2px 8px rgba(255, 63, 108, 0.1) !important;
+.source-chip .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+/* Store marks. Given their own breathing room so each keeps its clear space,
+   and never recoloured - they carry brand colour, the UI does not tint them. */
+.plat-logo { flex-shrink: 0; display: block; }
+.plat-logo svg { width: 100%; height: 100%; display: block; }
+.source-chip .plat-logo { margin-right: .1rem; }
+
+/* ---------- Tab guide strip: what this tab is for ---------- */
+.guide {
+    display: flex; align-items: flex-start; gap: .65rem;
+    font-size: .93rem; color: var(--muted); line-height: 1.6;
+    margin: 0 .25rem 1.35rem .25rem;
+}
+.guide svg { color: var(--brand-ink); margin-top: .18rem; }
+.guide b { color: var(--body); font-weight: 600; }
+
+/* ---------- Headline answer ---------- */
+.lede {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.35rem; font-weight: 500; line-height: 1.5; color: var(--ink);
+    margin: 0; letter-spacing: -.012em;
+}
+.lede b { font-weight: 700; color: var(--brand-ink); }
+.lede-note {
+    font-size: .95rem; color: var(--muted); margin: .9rem 0 0 0; line-height: 1.6;
+    padding-top: .9rem; border-top: 1px solid var(--line-soft);
 }
 
-/* Evidence Cards */
-.evidence-card {
-    background: #FFFFFF;
-    border: 1px solid #EAEAEC;
-    border-radius: 14px;
-    padding: 1.25rem;
-    margin-bottom: 1rem;
-    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-    box-shadow: 0 2px 8px rgba(40, 44, 63, 0.04);
-    display: flex;
-    flex-direction: column;
-    height: 100%;
+/* ---------- Stats row (inside one panel, no nested cards) ---------- */
+.stat .label {
+    display: flex; align-items: center; gap: .4rem;
+    font-size: .78rem; font-weight: 600; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: .55rem;
 }
-.evidence-card:hover {
-    border-color: #FFCCD7;
-    box-shadow: 0 6px 18px rgba(255, 63, 108, 0.08);
+.stat .value {
+    font-family: 'Outfit', sans-serif;
+    font-size: 2.25rem; font-weight: 700; color: var(--ink);
+    line-height: 1.05; font-variant-numeric: tabular-nums; letter-spacing: -.025em;
+}
+.stat .foot { font-size: .88rem; color: var(--muted); margin-top: .45rem; line-height: 1.5; }
+
+/* ---------- Numbered insight rows ---------- */
+.insight-row { display: flex; gap: .85rem; padding: .95rem 0; border-top: 1px solid var(--line-soft); }
+.insight-row:first-child { border-top: none; padding-top: 0; }
+.insight-row:last-child { padding-bottom: 0; }
+.insight-row .num {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--brand-soft); color: var(--brand-ink);
+    font-size: .8rem; font-weight: 700;
+    box-shadow: inset 0 0 0 1px var(--brand-line);
+}
+.insight-row p { margin: 0; font-size: .97rem; line-height: 1.62; color: var(--body); }
+.insight-row p strong { color: var(--ink); font-weight: 600; }
+
+/* ---------- Evidence cards (glass, sit directly on the backdrop) ---------- */
+.evidence {
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border-radius: var(--radius-lg);
+    padding: 1.2rem 1.3rem;
+    margin-bottom: 1.1rem;
+    box-shadow: var(--glass-ring), var(--glass-edge), var(--glass-shadow);
+    transition: transform var(--ease), box-shadow var(--ease);
+}
+.evidence:hover {
     transform: translateY(-2px);
+    box-shadow: 0 0 0 1px var(--brand-line), var(--glass-edge), 0 14px 34px -12px rgba(217,43,88,.3);
 }
-.evidence-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.75rem;
-    flex-wrap: wrap;
-    gap: 0.4rem;
+.evidence .meta-top {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .5rem; flex-wrap: wrap; margin-bottom: .9rem;
 }
-.badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.25rem 0.55rem;
-    border-radius: 6px;
-    font-size: 0.75rem;
-    font-weight: 600;
-    letter-spacing: 0.01em;
+.evidence .quote {
+    font-size: 1rem; line-height: 1.65; color: var(--ink);
+    padding-left: .95rem; border-left: 2px solid var(--brand-line);
+    margin-bottom: .95rem;
 }
-.badge-ios { background: #EFF6FF; color: #1D4ED8; border: 1px solid #BFDBFE; }
-.badge-android { background: #F0FDF4; color: #15803D; border: 1px solid #BBF7D0; }
-.badge-youtube { background: #FEF2F2; color: #B91C1C; border: 1px solid #FECACA; }
-.badge-manual { background: #FAF5FF; color: #7E22CE; border: 1px solid #E9D5FF; }
-
-.badge-sev-high { background: #FFF1F2; color: #BE123C; border: 1px solid #FFE4E6; }
-.badge-sev-med { background: #FFFBEB; color: #B45309; border: 1px solid #FDE68A; }
-.badge-sev-low { background: #F8FAFC; color: #475569; border: 1px solid #E2E8F0; }
-
-.evidence-quote {
-    font-size: 0.93rem;
-    color: #282C3F;
-    line-height: 1.6;
-    font-style: italic;
-    margin-bottom: 0.85rem;
-    flex-grow: 1;
-    position: relative;
-    padding: 0.65rem 0.9rem;
-    background: #FAF9FA;
-    border-left: 3.5px solid #FF3F6C;
-    border-radius: 0 6px 6px 0;
+.evidence .workaround {
+    display: flex; gap: .55rem; align-items: flex-start;
+    background: var(--brand-soft);
+    border-radius: var(--radius-md);
+    padding: .65rem .8rem;
+    font-size: .89rem; color: var(--body); line-height: 1.55;
+    margin-bottom: .9rem;
 }
-.evidence-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding-top: 0.75rem;
-    border-top: 1px solid #F0F0F2;
-    font-size: 0.8rem;
-    color: #686B78;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-}
-.workaround-tag {
-    background: #FFF0F4;
-    color: #E11B68;
-    border: 1px solid #FFCCD7;
-    border-radius: 6px;
-    padding: 0.25rem 0.5rem;
-    font-size: 0.78rem;
-    font-style: normal;
-    display: inline-block;
-    margin-top: 0.4rem;
+.evidence .workaround svg { color: var(--brand-ink); flex-shrink: 0; margin-top: 3px; }
+.evidence .meta-bot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .5rem; flex-wrap: wrap;
+    padding-top: .8rem; border-top: 1px solid var(--line-soft);
+    font-size: .85rem; color: var(--muted);
 }
 
-/* Sidebar Custom Styling */
+/* ---------- Tags & pills ---------- */
+.src { display: inline-flex; align-items: center; gap: .45rem; font-size: .85rem; font-weight: 600; color: var(--body); }
+.src .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.sev {
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .22rem .6rem; border-radius: var(--radius-sm);
+    font-size: .8rem; font-weight: 600;
+}
+.sev-high { background: rgba(217, 45, 32, .1);  color: #A9231A; box-shadow: inset 0 0 0 1px rgba(217,45,32,.22); }
+.sev-med  { background: rgba(181, 113, 0, .11); color: #8A5300; box-shadow: inset 0 0 0 1px rgba(181,113,0,.24); }
+.sev-low  { background: rgba(28, 30, 46, .06);  color: #4B4E62; box-shadow: inset 0 0 0 1px rgba(28,30,46,.12); }
+.tag {
+    display: inline-block; padding: .22rem .6rem; border-radius: var(--radius-sm);
+    background: rgba(28, 30, 46, .05); box-shadow: inset 0 0 0 1px rgba(28,30,46,.1);
+    font-size: .8rem; font-weight: 500; color: var(--body);
+}
+
+/* ---------- Workaround cards ---------- */
+.wa-card {
+    background: var(--glass);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border-radius: var(--radius-lg); padding: 1.05rem 1.15rem;
+    margin-bottom: .9rem; height: 100%;
+    box-shadow: var(--glass-ring), var(--glass-edge), var(--glass-shadow);
+}
+.wa-card .txt { font-size: .95rem; color: var(--ink); line-height: 1.6; }
+.wa-card .cnt {
+    font-size: .82rem; color: var(--brand-ink); margin-top: .6rem;
+    font-weight: 600; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Section nav: a floating glass segmented control ---------- */
+.st-key-navbar {
+    background: var(--glass-strong);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    padding: .35rem !important;
+    border-radius: 15px;
+    box-shadow: var(--glass-ring), var(--glass-edge), 0 6px 20px -10px rgba(28,30,46,.22);
+    margin-bottom: 1.9rem;
+}
+.st-key-navbar div[role="radiogroup"] { gap: .2rem; flex-wrap: nowrap; overflow-x: auto; }
+.st-key-navbar div[role="radiogroup"] > label {
+    background: transparent;
+    box-shadow: none;
+    border-radius: 11px;
+    padding: 0 1.05rem !important;
+    min-height: 42px;
+    white-space: nowrap;
+    transition: color var(--ease), background var(--ease), box-shadow var(--ease);
+}
+.st-key-navbar div[role="radiogroup"] > label:hover { background: rgba(28,30,46,.05); }
+.st-key-navbar div[role="radiogroup"] > label p {
+    font-size: .95rem !important; font-weight: 500; color: var(--muted) !important;
+}
+.st-key-navbar div[role="radiogroup"] > label:has(input:checked) {
+    background: #FFFFFF;
+    box-shadow: 0 1px 3px rgba(28,30,46,.12);
+}
+.st-key-navbar div[role="radiogroup"] > label:has(input:checked) p {
+    color: var(--brand-ink) !important; font-weight: 600;
+}
+
+/* ---------- Pill selector (radio) ---------- */
+div[role="radiogroup"] { flex-direction: row; gap: .5rem; flex-wrap: wrap; }
+div[role="radiogroup"] > label {
+    background: rgba(255,255,255,.6);
+    box-shadow: inset 0 0 0 1px rgba(28,30,46,.09);
+    border: none;
+    border-radius: 999px;
+    padding: .5rem 1.1rem !important;
+    margin: 0 !important;
+    cursor: pointer;
+    transition: background var(--ease), box-shadow var(--ease);
+    min-height: 44px;
+    display: flex; align-items: center;
+}
+div[role="radiogroup"] > label:hover { background: rgba(255,255,255,.9); }
+div[role="radiogroup"] > label > div:first-child { display: none; }  /* hide the radio dot */
+div[role="radiogroup"] > label p { font-size: .95rem !important; font-weight: 500; color: var(--body) !important; }
+div[role="radiogroup"] > label:has(input:checked) {
+    background: #FFFFFF;
+    box-shadow: inset 0 0 0 1.5px var(--brand-line), 0 2px 8px -2px rgba(217,43,88,.28);
+}
+div[role="radiogroup"] > label:has(input:checked) p { color: var(--brand-ink) !important; font-weight: 600; }
+div[data-testid="stRadio"] > label { display: none; }  /* collapsed widget label leaves no gap */
+
+/* ---------- Sidebar ---------- */
 section[data-testid="stSidebar"] {
-    background-color: #FFFFFF !important;
-    border-right: 1px solid #EAEAEC !important;
+    background: rgba(255,255,255,.72) !important;
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border-right: 1px solid rgba(28,30,46,.07) !important;
+}
+section[data-testid="stSidebar"] .block-container { padding-top: 2.25rem; }
+.side-title {
+    display: flex; align-items: center; gap: .5rem;
+    font-family: 'Outfit', sans-serif; font-size: 1.05rem; font-weight: 600;
+    color: var(--ink); margin-bottom: .3rem;
+}
+.side-note { font-size: .89rem; color: var(--muted); line-height: 1.6; margin-bottom: 1.1rem; }
+.slice-card {
+    background: rgba(255,255,255,.8);
+    box-shadow: inset 0 0 0 1.5px var(--brand-line), 0 4px 14px -8px rgba(217,43,88,.3);
+    border-radius: var(--radius-lg);
+    padding: 1rem 1.1rem;
+}
+.slice-card .l {
+    font-size: .76rem; color: var(--muted); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em; margin-bottom: .3rem;
+}
+.slice-card .v {
+    font-family: 'Outfit', sans-serif; font-size: 1.7rem; font-weight: 700;
+    color: var(--ink); line-height: 1.05; font-variant-numeric: tabular-nums;
+}
+.slice-card .n { font-size: .85rem; color: var(--body); margin-top: .35rem; line-height: 1.5; }
+
+/* ---------- Inputs ---------- */
+.stTextInput label, .stTextArea label, .stSelectbox label {
+    font-size: .89rem !important; font-weight: 600 !important; color: var(--body) !important;
+    padding-bottom: .3rem;
+}
+.stTextInput input, .stTextArea textarea {
+    border-radius: var(--radius-md) !important;
+    border: none !important;
+    box-shadow: inset 0 0 0 1px rgba(28,30,46,.14) !important;
+    background: rgba(255,255,255,.85) !important;
+    font-size: 1rem !important; color: var(--ink) !important;
+    min-height: 46px;
+}
+.stTextArea textarea { min-height: 120px; line-height: 1.65; }
+.stTextInput input:focus, .stTextArea textarea:focus {
+    box-shadow: inset 0 0 0 2px var(--brand), 0 0 0 4px rgba(255,63,108,.16) !important;
+}
+div[data-baseweb="select"] > div {
+    border-radius: var(--radius-md) !important;
+    border: none !important;
+    box-shadow: inset 0 0 0 1px rgba(28,30,46,.14);
+    background: rgba(255,255,255,.85) !important;
+    min-height: 46px; font-size: .97rem;
+}
+div[data-baseweb="select"] > div:hover { box-shadow: inset 0 0 0 1px rgba(28,30,46,.26); }
+
+/* ---------- Buttons ---------- */
+.stButton button {
+    border-radius: var(--radius-md) !important;
+    font-weight: 600 !important; font-size: .95rem !important;
+    min-height: 46px;
+    border: none !important;
+    background: rgba(255,255,255,.8) !important;
+    box-shadow: inset 0 0 0 1px rgba(28,30,46,.12), 0 1px 2px rgba(28,30,46,.05) !important;
+    color: var(--body) !important;
+    transition: background var(--ease), box-shadow var(--ease), color var(--ease) !important;
+    cursor: pointer;
+}
+.stButton button:hover {
+    background: #FFFFFF !important;
+    box-shadow: inset 0 0 0 1.5px var(--brand-line), 0 3px 10px -3px rgba(217,43,88,.3) !important;
+    color: var(--brand-ink) !important;
+}
+.stButton button[kind="primary"] {
+    background: var(--brand) !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 4px 14px -4px rgba(255,63,108,.6) !important;
+}
+.stButton button[kind="primary"]:hover {
+    background: var(--brand-ink) !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 6px 18px -4px rgba(217,43,88,.65) !important;
+}
+.stButton button:focus-visible, .stTextInput input:focus-visible {
+    outline: 2px solid var(--brand) !important;
+    outline-offset: 2px !important;
 }
 
-/* Primary Action Buttons */
-button[kind="primary"] {
-    background: linear-gradient(135deg, #FF3F6C 0%, #E11B68 100%) !important;
-    color: #FFFFFF !important;
-    border: none !important;
-    border-radius: 8px !important;
-    padding: 0.5rem 1.25rem !important;
-    font-weight: 600 !important;
-    box-shadow: 0 3px 12px rgba(255, 63, 108, 0.25) !important;
-    transition: all 0.2s ease;
+/* Pills draw their keyboard focus ring INSIDE the pill. An outline sits outside
+   the element, so the nav's horizontal scroll container clipped everything but
+   its right-hand arc - which read as a stray bracket beside the active item.
+   :has(:focus-visible) also keeps the ring to keyboard users; :focus-within
+   matched a plain mouse click too. */
+div[role="radiogroup"] > label:has(input:focus-visible) {
+    outline: none !important;
+    box-shadow: inset 0 0 0 2px var(--brand) !important;
 }
-button[kind="primary"]:hover {
-    box-shadow: 0 5px 16px rgba(255, 63, 108, 0.4) !important;
-    transform: translateY(-1px);
+.st-key-navbar div[role="radiogroup"] > label:has(input:focus-visible) {
+    box-shadow: inset 0 0 0 2px var(--brand), 0 1px 3px rgba(28, 30, 46, .12) !important;
+}
+
+/* ---------- Expander / dataframe / misc ---------- */
+[data-testid="stExpander"] {
+    background: rgba(255,255,255,.6) !important;
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    border: none !important;
+    border-radius: var(--radius-lg) !important;
+    box-shadow: var(--glass-ring), var(--glass-edge);
+}
+[data-testid="stExpander"] summary {
+    font-size: .97rem; font-weight: 600; color: var(--body); min-height: 48px;
+}
+[data-testid="stExpander"] summary:hover { color: var(--brand-ink); }
+[data-testid="stDataFrame"] { border-radius: var(--radius-md); overflow: hidden; }
+[data-testid="stCaptionContainer"] p { color: var(--muted) !important; font-size: .89rem !important; }
+[data-testid="stAlertContainer"] { border-radius: var(--radius-md); font-size: .95rem; }
+hr { border-color: var(--line-soft) !important; margin: 2rem 0 !important; }
+.spacer-sm { height: .75rem; }
+.spacer-md { height: 1.35rem; }
+.spacer-lg { height: 2rem; }
+
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+}
+/* Blur is expensive and can wash out on low-power/forced-colors setups */
+@media (prefers-contrast: more) {
+    [class*="st-key-p_"], .evidence, .wa-card { background: #FFFFFF; backdrop-filter: none; }
+}
+@media (max-width: 640px) {
+    html { font-size: 16px; }
+    .main .block-container { padding-top: 1.25rem; }
+    .app-header h1 { font-size: 1.4rem; }
+    .lede { font-size: 1.15rem; }
+    [class*="st-key-p_"] { padding: 1.25rem 1.15rem !important; border-radius: 18px; }
 }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
+# ------------------------------------------------------------------
+# Inline SVG icons (Lucide geometry) - used inside custom HTML blocks
+# where Streamlit's :material/...: syntax is not available.
+# ------------------------------------------------------------------
+_ICON_PATHS = {
+    "bag": '<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
+    "target": '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+    "layers": '<path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+    "bookmark": '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"/>',
+    "alert": '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    "check": '<path d="M22 11.1V12a10 10 0 1 1-5.9-9.1"/><path d="m9 11 3 3L22 4"/>',
+    "spark": '<path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/>',
+    "wrench": '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9Z"/>',
+    "trend": '<path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/>',
+    "sliders": '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+    "compass": '<circle cx="12" cy="12" r="10"/><polygon points="16.2 7.8 14.1 14.1 7.8 16.2 9.9 9.9 16.2 7.8"/>',
+    "rocket": '<path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2 0-2.8a2 2 0 0 0-3 0Z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.9A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.7-6 11a22 22 0 0 1-4 2Z"/><path d="M9 12H4s.5-3 2-4c1.7-1 5 0 5 0"/><path d="M12 15v5s3-.5 4-2c1-1.7 0-5 0-5"/>',
+    "quote": '<path d="M17 6H3"/><path d="M21 12H8"/><path d="M21 18H8"/><path d="M3 12v6"/>',
+    "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    "grid": '<rect width="7" height="7" x="3" y="3" rx="1.5"/><rect width="7" height="7" x="14" y="3" rx="1.5"/><rect width="7" height="7" x="14" y="14" rx="1.5"/><rect width="7" height="7" x="3" y="14" rx="1.5"/>',
+    "flask": '<path d="M10 2v7.5L4.6 18A2 2 0 0 0 6.3 21h11.4a2 2 0 0 0 1.7-3L14 9.5V2"/><path d="M8.5 2h7"/><path d="M7 15h10"/>',
+    "search": '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+}
+
+
+# ------------------------------------------------------------------
+# Platform marks
+# ------------------------------------------------------------------
+# Inline SVG reconstructions of the Google Play, App Store and YouTube marks,
+# used to attribute each signal to the store it came from. Inline rather than
+# linked so the app stays self-contained and works offline. These are the
+# trademarks of Google LLC and Apple Inc. respectively; drop the official asset
+# in here if you need exact brand-guideline compliance.
+#
+# Note they are used for *labels only*. Charts keep the validated categorical
+# palette: a four-colour mark cannot encode a data series, and YouTube red would
+# collide with the severity scale.
+_PLATFORM_SVG = {
+    # Google Play: four regions meeting at a point inside the play triangle.
+    # Vertices are softened with a same-colour round join so the mark does not
+    # read as a hard-edged triangle at small sizes.
+    "Android": (
+        '<g stroke-linejoin="round" stroke-width="34">'
+        '<polygon points="76,58 215,134 215,256" fill="#34A853" stroke="#34A853"/>'
+        '<polygon points="76,58 215,256 76,454" fill="#4285F4" stroke="#4285F4"/>'
+        '<polygon points="76,454 215,256 215,378" fill="#EA4335" stroke="#EA4335"/>'
+        '<polygon points="215,134 436,256 215,378" fill="#FBBC04" stroke="#FBBC04"/>'
+        "</g>"
+    ),
+    # App Store: blue squircle with the stylised "A".
+    "iOS": (
+        '<defs><linearGradient id="appstore-g" x1="0" y1="0" x2="0" y2="1">'
+        '<stop offset="0" stop-color="#1AC7FC"/><stop offset="1" stop-color="#1E56E3"/>'
+        "</linearGradient></defs>"
+        '<rect width="512" height="512" rx="114" fill="url(#appstore-g)"/>'
+        '<g stroke="#fff" stroke-width="38" stroke-linecap="round" fill="none">'
+        '<path d="M170 355 L266 188"/>'
+        '<path d="M300 246 L363 355"/>'
+        '<path d="M137 296 H375"/>'
+        '<path d="M146 358 L133 380"/>'
+        "</g>"
+    ),
+    # YouTube: rounded red plate with the white play triangle.
+    "YouTube": (
+        '<path fill="#FF0000" d="M501 132a63 63 0 0 0-44-45C418 76 256 76 256 76s-162 0-201 11a63 63 0 0 0-44 45'
+        'c-11 39-11 124-11 124s0 85 11 124a63 63 0 0 0 44 45c39 11 201 11 201 11s162 0 201-11a63 63 0 0 0 44-45'
+        'c11-39 11-124 11-124s0-85-11-124z"/>'
+        '<polygon fill="#fff" points="204,332 204,180 336,256"/>'
+    ),
+}
+
+
+# Drop the official asset in as assets/<file>.svg and it is used instead of the
+# reconstruction above - the supported way to get exact brand-guideline fidelity.
+_PLATFORM_ASSET = {"iOS": "app-store.svg", "Android": "google-play.svg", "YouTube": "youtube.svg"}
+
+
+@st.cache_data
+def _official_marks():
+    marks = {}
+    for platform, filename in _PLATFORM_ASSET.items():
+        path = os.path.join("assets", filename)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                marks[platform] = f.read()
+    return marks
+
+
+def platform_logo(platform: str, size: int = 16) -> str:
+    """Inline SVG store mark, or an empty string for an unknown source."""
+    official = _official_marks().get(platform)
+    if official:
+        # Size the supplied asset without touching its colours or proportions.
+        return (
+            f'<span class="plat-logo" style="width:{size}px;height:{size}px;display:inline-block">'
+            f"{official}</span>"
+        )
+
+    body = _PLATFORM_SVG.get(platform)
+    if not body:
+        return ""
+    return (
+        f'<svg viewBox="0 0 512 512" width="{size}" height="{size}" xmlns="http://www.w3.org/2000/svg" '
+        f'aria-hidden="true" focusable="false" class="plat-logo">{body}</svg>'
+    )
+
+
+def icon(name: str, size: int = 17, color: str = "currentColor", stroke: float = 1.8) -> str:
+    """Return an inline SVG string for use inside custom HTML blocks."""
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 24 24" '
+        f'fill="none" stroke="{color}" stroke-width="{stroke}" stroke-linecap="round" '
+        f'stroke-linejoin="round" aria-hidden="true" focusable="false" '
+        f'style="flex-shrink:0;vertical-align:-.15em">{_ICON_PATHS[name]}</svg>'
+    )
+
+
+# ------------------------------------------------------------------
+# Layout primitives
+# ------------------------------------------------------------------
+@contextmanager
+def panel(key: str, title: str = "", desc: str = "", icon_name: str = "grid", divider: bool = True):
+    """A frosted glass section. Every part of the page is one of these."""
+    with st.container(key=f"p_{key}"):
+        if title:
+            st.markdown(
+                f'<div class="panel-head{"" if divider else " bare"}">'
+                f'<div class="panel-icon">{icon(icon_name, 17)}</div>'
+                f"<div><div class=\"panel-title\">{html.escape(title)}</div>"
+                f'{f"<div class=panel-desc>{html.escape(desc)}</div>" if desc else ""}</div></div>',
+                unsafe_allow_html=True,
+            )
+        yield
+
+
+def guide(text_html: str) -> None:
+    """One line at the top of a tab explaining what it is and what to do."""
+    st.markdown(f'<div class="guide">{icon("info", 16)}<div>{text_html}</div></div>', unsafe_allow_html=True)
+
+
+def stat(label: str, value: str, foot: str = "", icon_name: str = "trend") -> None:
+    st.markdown(
+        f'<div class="stat"><div class="label">{icon(icon_name, 14, MUTED)}{html.escape(label)}</div>'
+        f'<div class="value">{html.escape(value)}</div>'
+        f'{f"<div class=foot>{html.escape(foot)}</div>" if foot else ""}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def insight_rows(points: list) -> None:
+    """points: list of (bold_lead, rest) tuples."""
+    st.markdown(
+        "".join(
+            f'<div class="insight-row"><div class="num">{i + 1}</div>'
+            f"<p><strong>{lead}</strong> {rest}</p></div>"
+            for i, (lead, rest) in enumerate(points)
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+# ------------------------------------------------------------------
+# Chart builders
+# ------------------------------------------------------------------
+def _base_layout(fig: go.Figure, height: int, legend: bool = False) -> go.Figure:
+    fig.update_layout(
+        height=height,
+        margin=dict(l=6, r=10, t=6, b=0),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family=CHART_FONT, color=BODY, size=13.5),
+        showlegend=legend,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0,
+            title_text="", font=dict(size=13, color=BODY), bgcolor="rgba(0,0,0,0)",
+        ),
+        hoverlabel=dict(
+            bgcolor="#FFFFFF", bordercolor=LINE,
+            font=dict(family=CHART_FONT, color=INK, size=13),
+        ),
+        bargap=0.4,
+        bargroupgap=0.12,
+    )
+    return fig
+
+
+def magnitude_bars(labels, values, *, suffix="", row_h=42, hover_noun="signals"):
+    """Single-hue horizontal bars with direct value labels.
+
+    Takes rows already in display order (rank 1 first) and reverses the y-axis so
+    rank 1 sits at the top. One series, so no legend: the panel title names the
+    measure. Magnitude is carried by bar length; the hue carries no extra meaning.
+    """
+    labels = [str(la) for la in labels]
+    values = [float(v) for v in values]
+    height = max(180, row_h * len(labels) + 30)
+    text = [f"{v:,.1f}{suffix}" if suffix == "%" else f"{v:,.0f}{suffix}" for v in values]
+    hover_val = "%{x:,.1f}" if suffix == "%" else "%{x:,.0f}"
+
+    fig = go.Figure(
+        go.Bar(
+            x=values,
+            y=labels,
+            orientation="h",
+            marker=dict(color=BRAND_INK, cornerradius=5),
+            text=text,
+            textposition="outside",
+            textfont=dict(family=CHART_FONT, size=13, color=BODY),
+            cliponaxis=False,
+            hovertemplate="<b>%{y}</b><br>" + hover_val + " " + hover_noun + "<extra></extra>",
+        )
+    )
+    _base_layout(fig, height)
+    fig.update_xaxes(visible=False, range=[0, (max(values) * 1.26) if values else 1])
+    fig.update_yaxes(
+        autorange="reversed",     # rank 1 at the top, whatever the trace order
+        automargin=True,          # never clip a long category label
+        ticklabelstandoff=10,     # breathing room without a whitespace hack
+        showgrid=False,
+        zeroline=False,
+        tickfont=dict(family=CHART_FONT, size=13.5, color=BODY),
+        linecolor="rgba(0,0,0,0)",
+    )
+    return fig
+
+
+def grouped_platform_bars(plot_df, height=400):
+    """Grouped bars, one validated hue per platform. Legend is always present."""
+    fig = go.Figure()
+    for platform, color in PLATFORM_COLORS.items():
+        sub = plot_df[plot_df["Platform"] == platform]
+        if sub.empty:
+            continue
+        fig.add_trace(
+            go.Bar(
+                name=platform,
+                x=sub["Blocker"],
+                y=sub["% Share"],
+                marker=dict(color=color, cornerradius=4),
+                hovertemplate="<b>%{x}</b><br>" + platform + ": %{y:.1f}% of corpus<extra></extra>",
+            )
+        )
+    _base_layout(fig, height, legend=True)
+    fig.update_layout(barmode="group", margin=dict(l=6, r=10, t=42, b=0))
+    fig.update_xaxes(
+        showgrid=False, tickangle=-25, automargin=True,
+        tickfont=dict(family=CHART_FONT, size=12.5, color=MUTED),
+        linecolor=LINE,
+    )
+    fig.update_yaxes(
+        showgrid=True, gridcolor=LINE, zeroline=False, ticksuffix="%",
+        tickfont=dict(family=CHART_FONT, size=12.5, color=MUTED),
+        title=dict(text="Share of that platform's blockers", font=dict(size=12.5, color=MUTED)),
+    )
+    return fig
+
+
+PLOTLY_CONFIG = {"displayModeBar": False, "responsive": True}
+
 DATA_PATH = "data/extracted.csv"
 
 
 # ------------------------------------------------------------------
-# Data loading & Secrets
+# Data loading & secrets
 # ------------------------------------------------------------------
+# The extractor emits both canonical bucket keys and the short alias forms from
+# taxonomy.ALIASES, so `price` and `price_waiting` arrive as separate keys that
+# share one display label. Folding them here keeps every chart, the opportunity
+# score and the headline counting the same thing.
+CANONICAL_KEYS = {
+    "price": "price_waiting",
+    "quality": "quality_authenticity_doubt",
+    "fit": "fit_size_uncertainty",
+    "availability": "out_of_stock",
+    "styling": "styling_uncertainty",
+    "uncertainty": "other",
+    "uncertainty_type": "other",
+}
+
+
 @st.cache_data
 def load_data():
     if not os.path.exists(DATA_PATH):
         return None
     df = pd.read_csv(DATA_PATH)
     df["relevant"] = df["relevant"].astype(str).str.lower().isin(["true", "1"])
+
+    for col in ("save_motive", "current_blocker"):
+        cleaned = df[col].astype(str).str.strip().str.lower()
+        df[col] = cleaned.replace(CANONICAL_KEYS).where(df[col].notna())
+
+    # Free-text channel names only differ by case ("Myntra" vs "myntra").
+    df["external_channel"] = df["external_channel"].astype(str).str.strip().str.lower().where(
+        df["external_channel"].notna()
+    )
     return df
 
 
@@ -341,6 +841,90 @@ def bridge_secrets():
 
 
 bridge_secrets()
+
+# ------------------------------------------------------------------
+# Bucket accounting
+# ------------------------------------------------------------------
+# Residual buckets are shown - never dropped - but they are a property of the
+# taxonomy rather than a finding, so they are folded into one row that always
+# sorts last and never leads a ranking or the headline.
+RESIDUAL_KEYS = {"other", "none", "nan", "unclear", "unspecified", "uncertainty", "uncertainty_type", ""}
+RESIDUAL_LABEL = "Other / unspecified"
+
+
+def _label_frame(series):
+    """Clean keys, drop blanks, and split residual buckets from named ones."""
+    keys = series.dropna().astype(str).str.strip().str.lower()
+    keys = keys[keys != ""]
+    return keys, keys.isin(RESIDUAL_KEYS)
+
+
+def ranked_counts(series, n=99, normalize=False, denom=None):
+    """Counts by *display label*, residual buckets folded into one row at the bottom.
+
+    Aggregating on the label rather than the raw key matters: the extractor emits
+    both `price` and `price_waiting`, which share one label. Counting by key would
+    draw them as two bars with the same name.
+
+    `n` defaults high so nothing is silently hidden - pass a smaller number only
+    where the chart genuinely cannot fit every bucket.
+
+    `denom` sets the base for percentages. Pass the slice size (not the number of
+    non-null values) so a share here means the same thing as a share anywhere else
+    in the app; the bars then sum to under 100% by exactly the not-recorded share,
+    which each caller states.
+    """
+    keys, residual = _label_frame(series)
+    total = len(keys)
+    if not total:
+        return pd.Series(dtype=float)
+
+    named = keys[~residual].map(bucket_label).value_counts().head(n)
+    residual_n = int(residual.sum())
+
+    if normalize:
+        base = denom if denom else total
+        named = named / base * 100
+        residual_n = residual_n / base * 100
+
+    if residual_n:
+        named = pd.concat([named, pd.Series({RESIDUAL_LABEL: residual_n})])
+    return named
+
+
+def leading_label(series):
+    """Label, count and total for the top *named* bucket - used in headline copy."""
+    keys, residual = _label_frame(series)
+    named = keys[~residual].map(bucket_label).value_counts()
+    if named.empty:
+        return "—", 0, max(1, len(keys))
+    return named.index[0], int(named.iloc[0]), max(1, len(keys))
+
+
+def residual_breakdown(series):
+    """Exactly which raw keys ended up in the Other / unspecified row."""
+    keys, residual = _label_frame(series)
+    return keys[residual].value_counts(), len(keys)
+
+
+def share(frame, column, *keys, base=None):
+    """Percentage of `keys` in `column`, over an explicit denominator.
+
+    Percentages in this corpus are only meaningful with their base stated: the
+    same bucket is a different number over "all relevant signals" than over
+    "signals with a blocker recorded". Every caller passes `base` deliberately.
+    """
+    col = frame[column].dropna().astype(str).str.strip().str.lower()
+    denom = len(frame) if base is None else len(base)
+    n = int(col.isin(keys).sum())
+    return n, denom, (n / denom * 100 if denom else 0.0)
+
+
+def stated(frame, column, drop=("none", "nan", "unclear", "")):
+    """Rows where the model actually recorded a value for `column`."""
+    col = frame[column].dropna().astype(str).str.strip().str.lower()
+    return col[~col.isin(drop)]
+
 
 # ------------------------------------------------------------------
 # Opportunity scoring
@@ -360,18 +944,18 @@ COVERAGE_GAP = {
 
 
 def score_opportunities(df):
-    rel = df[df["relevant"]]
-    if rel.empty:
+    rel_df = df[df["relevant"]] if "relevant" in df.columns else df
+    if rel_df.empty:
         return pd.DataFrame()
 
     rows = []
-    total = len(rel)
+    total = len(rel_df)
 
     for key in BUCKETS:
         if key == "other":
             continue
 
-        subset = rel[rel["current_blocker"] == key]
+        subset = rel_df[rel_df["current_blocker"] == key]
         if subset.empty:
             continue
 
@@ -383,47 +967,26 @@ def score_opportunities(df):
 
         addressable = is_addressable(key)
         gap = COVERAGE_GAP.get(key, 0.5)
-
         score = pct * avg_sev * gap * (1 if addressable else 0)
 
         rows.append(
             {
                 "Opportunity": bucket_label(key),
-                "Share of blockers": f"{pct:.1f}%",
-                "Volume (n)": count,
-                "Avg Severity (1-3)": f"{avg_sev:.2f}",
-                "Coverage Gap": gap if addressable else None,
-                "In Scope": "Yes" if addressable else "No",
-                "Opportunity Score": round(score, 1),
+                "Share": pct,
+                "Signals": count,
+                "Avg severity": round(float(avg_sev), 2),
+                "Score": round(score, 1),
             }
         )
 
-    return pd.DataFrame(rows).sort_values("Opportunity Score", ascending=False)
+    if not rows:  # a narrow segment can match no scoreable bucket at all
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("Score", ascending=False)
 
 
 # ------------------------------------------------------------------
-# Header
-# ------------------------------------------------------------------
-st.markdown(
-    """
-<div class="header-container">
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
-        <div>
-            <h1 class="header-title">Wishlist Discovery Engine</h1>
-            <div class="header-subtitle">AI-powered customer intelligence decoding online fashion hesitations, blockers & feature opportunities.</div>
-        </div>
-        <div style="margin-top: 0.5rem;">
-            <span class="badge badge-ios">🍏 iOS App Store</span>
-            <span class="badge badge-android">🤖 Google Play</span>
-            <span class="badge badge-youtube">▶️ YouTube Hauls</span>
-        </div>
-    </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
-
 # Load dataset
+# ------------------------------------------------------------------
 df = load_data()
 
 if df is None:
@@ -432,22 +995,65 @@ if df is None:
 
 rel = df[df["relevant"]]
 
+
+def platform_of(source: str) -> str:
+    s = str(source)
+    if s.startswith("appstore"):
+        return "iOS"
+    if s == "playstore":
+        return "Android"
+    if s == "youtube":
+        return "YouTube"
+    return "Other"
+
+
 # ------------------------------------------------------------------
-# Sidebar Global Filters
+# Header
 # ------------------------------------------------------------------
-st.sidebar.markdown("### 🎛️ Segment Filters")
-st.sidebar.caption("Filter corpus across customer demographics & contexts.")
+_src_counts = df["source"].apply(platform_of).value_counts()
+_chips = "".join(
+    f'<span class="source-chip">{platform_logo(p, 17)}'
+    f"{PLATFORM_NAMES[p]} · {int(_src_counts.get(p, 0)):,}</span>"
+    for p in ("iOS", "Android", "YouTube")
+)
+
+st.markdown(
+    f"""
+<div class="app-header">
+  <div class="brand">
+    <div class="brand-mark">{icon("bag", 24, BRAND_INK)}</div>
+    <div>
+      <h1>Wishlist Discovery Engine</h1>
+      <div class="sub">Why {len(df):,} shoppers save items — and what stops them buying.</div>
+    </div>
+  </div>
+  <div class="source-strip">{_chips}</div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# ------------------------------------------------------------------
+# Sidebar: segment filters
+# ------------------------------------------------------------------
+st.sidebar.markdown(
+    f'<div class="side-title">{icon("sliders", 17, BRAND_INK)}Segment filters</div>'
+    '<div class="side-note">Narrow the corpus to one shopper segment. Every chart, table '
+    "and quote in the app follows this slice.</div>",
+    unsafe_allow_html=True,
+)
+
+FILTER_KEYS = ("f_gender", "f_category", "f_occasion")
 
 genders = ["All"] + sorted(rel["segment_gender"].dropna().unique().tolist())
-gender = st.sidebar.selectbox("Target Gender", genders)
+gender = st.sidebar.selectbox("Shopper gender", genders, key="f_gender")
 
 categories = ["All"] + sorted(rel["segment_category"].dropna().unique().tolist())
-category = st.sidebar.selectbox("Apparel Category", categories)
+category = st.sidebar.selectbox("Apparel category", categories, key="f_category")
 
 occasions = ["All"] + sorted(rel["segment_occasion"].dropna().unique().tolist())
-occasion = st.sidebar.selectbox("Occasion / Use-case", occasions)
+occasion = st.sidebar.selectbox("Occasion / use case", occasions, key="f_occasion")
 
-# Filter dataframe
 view = rel.copy()
 if gender != "All":
     view = view[view["segment_gender"] == gender]
@@ -456,397 +1062,599 @@ if category != "All":
 if occasion != "All":
     view = view[view["segment_occasion"] == occasion]
 
-st.sidebar.divider()
-st.sidebar.markdown("### 📊 Active Filter Slice")
-st.sidebar.metric("Filtered Relevant Items", f"{len(view):,}", delta=f"{len(view)-len(rel):,}" if len(view) != len(rel) else None)
-st.sidebar.caption(f"Covering {(len(view)/len(rel)*100):.1f}% of total relevant signal.")
+_active = [f for f in (gender, category, occasion) if f != "All"]
+_share = (len(view) / len(rel) * 100) if len(rel) else 0
 
-# ------------------------------------------------------------------
-# Main Tabs Navigation
-# ------------------------------------------------------------------
-tab_overview, tab_blueprint, tab_copilot, tab_evidence, tab_demo, tab_method = st.tabs(
-    [
-        "📊 Executive Overview",
-        "🎯 Strategic Deep Dives",
-        "🤖 Ask the Corpus (AI Copilot)",
-        "💬 Voice of Customer (Evidence)",
-        "⚡ Live Extractor",
-        "🔬 Methodology & Taxonomy",
-    ]
+st.sidebar.markdown('<div class="spacer-sm"></div>', unsafe_allow_html=True)
+st.sidebar.markdown(
+    '<div class="slice-card"><div class="l">Active slice</div>'
+    f'<div class="v">{len(view):,}</div><div class="n">'
+    + (
+        f"{_share:.0f}% of {len(rel):,} signals · " + " · ".join(html.escape(a) for a in _active)
+        if _active
+        else f"All {len(rel):,} relevant signals · no filters applied"
+    )
+    + "</div></div>",
+    unsafe_allow_html=True,
 )
 
-# ==================================================================
-# TAB 1: EXECUTIVE OVERVIEW
-# ==================================================================
-with tab_overview:
-    # Top Level KPI Metrics
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Items Analysed", f"{len(df):,}")
-    m2.metric("High-Intent Wishlist Signals", f"{len(rel):,}")
-    low_conf = (rel["confidence"] == "low").sum() if len(rel) else 0
-    m3.metric("AI Confidence Rate", f"{((len(rel)-low_conf) / len(rel) * 100):.1f}%" if len(rel) else "—")
 
-    st.markdown("<div style='height: 1.5rem;'></div>", unsafe_allow_html=True)
+def reset_filters():
+    for key in FILTER_KEYS:
+        st.session_state[key] = "All"
 
-    # Executive Summary Card
-    st.markdown(
-        """
-    <div class="exec-banner">
-        <h4>🎯 Key Strategic Takeaways</h4>
-        <p>• <b>Primary Friction Point:</b> Sizing & Fit ambiguity and Fabric Quality doubts represent 50%+ of purchase friction.<br>
-        • <b>Addressable Opportunity:</b> 100% of blockers are addressable via product/UX interventions (detailed size fit visuals, comparison tools, cross-brand guides, verified UGC photos) without relying on price discounting.<br>
-        • <b>Channel Divergence:</b> iOS users demonstrate higher sensitivity to product authenticity and styling curation compared to Android users.</p>
-    </div>
-    """,
-        unsafe_allow_html=True,
+
+if _active:
+    st.sidebar.markdown('<div class="spacer-sm"></div>', unsafe_allow_html=True)
+    st.sidebar.button(
+        "Clear all filters", on_click=reset_filters, width="stretch", icon=":material/filter_alt_off:"
     )
 
-    # Motives vs Blockers Visuals
-    c_left, c_right = st.columns(2)
+if view.empty:
+    st.warning("No signals match this segment. Widen the filters in the sidebar to continue.")
+    st.stop()
+
+# ------------------------------------------------------------------
+# Precomputed headline figures (recomputed per filter slice)
+# ------------------------------------------------------------------
+blocker_counts = view["current_blocker"].dropna().value_counts()
+
+# ONE denominator for every percentage in the app: signals in the current slice.
+# Mixing bases (all signals vs. signals-with-a-blocker vs. stated-uncertainties)
+# is what makes two true numbers for the same bucket disagree, so it is not done.
+BASE_N = len(view)
+
+# Headline copy names the leading *named* bucket. "Other / unspecified" is a
+# residual of the taxonomy, not a finding, so it never leads the sentence.
+top_blocker_label, top_blocker_n, _ = leading_label(view["current_blocker"])
+top_blocker_share = top_blocker_n / BASE_N * 100 if BASE_N else 0
+top_motive_label, _, _ = leading_label(view["save_motive"])
+
+named_blockers = blocker_counts[[k for k in blocker_counts.index if str(k).lower() not in RESIDUAL_KEYS]]
+top2_share = (named_blockers.head(2).sum() / BASE_N * 100) if BASE_N else 0
+
+# Two claims that must not be conflated:
+#   `is_addressable` only excludes the residual "other" bucket, so "addressable"
+#   means "landed in a named bucket" - it is NOT a statement about solvability.
+#   Waiting for a price drop is a named bucket but is precisely the blocker a
+#   product change cannot fix without discounting, so it is excluded separately.
+_price_n = int(blocker_counts.get("price_waiting", 0))
+no_discount_n = int(sum(c for k, c in blocker_counts.items() if is_addressable(str(k)))) - _price_n
+no_discount_share = (no_discount_n / BASE_N * 100) if BASE_N else 0
+top_price_share = (_price_n / BASE_N * 100) if BASE_N else 0
+# Everything left: the catch-all, an explicit "no blocker", or no blocker recorded.
+unresolved_n = BASE_N - no_discount_n - _price_n
+unresolved_share = (unresolved_n / BASE_N * 100) if BASE_N else 0
+high_sev_share = (view["severity"] == "high").mean() * 100 if len(view) else 0
+low_conf = (view["confidence"] == "low").sum()
+confidence_rate = ((len(view) - low_conf) / len(view) * 100) if len(view) else 0
+
+# ------------------------------------------------------------------
+# Section navigation
+# ------------------------------------------------------------------
+# Deliberately NOT st.tabs. A tab's selection lives in the component's own
+# client-side state, and a rerun triggered from inside a tab can remount the
+# component and silently throw the user back to the first tab - which is exactly
+# what happened when switching deep-dive pillars. Driving the selection from
+# session state instead makes it survive every rerun by construction, and lets
+# the section be deep-linked with ?view=...
+SECTIONS = {
+    "Overview": ("dashboard", "overview"),
+    "Deep dives": ("target", "deep-dives"),
+    "AI copilot": ("auto_awesome", "copilot"),
+    "Voice of customer": ("format_quote", "voice"),
+    "How it works": ("science", "method"),
+}
+_SLUG_TO_SECTION = {slug: name for name, (_, slug) in SECTIONS.items()}
+
+if "nav" not in st.session_state:
+    st.session_state["nav"] = _SLUG_TO_SECTION.get(st.query_params.get("view", ""), "Overview")
+
+
+def _sync_nav():
+    st.query_params["view"] = SECTIONS[st.session_state["nav"]][1]
+
+
+# Widgets that only render inside one section would have their state dropped on
+# the runs where that section is hidden; re-assigning keeps them alive.
+for _k in ("pillar", "copilot_input_box"):
+    if _k in st.session_state:
+        st.session_state[_k] = st.session_state[_k]
+
+with st.container(key="navbar"):
+    nav = st.radio(
+        "Section",
+        list(SECTIONS),
+        key="nav",
+        horizontal=True,
+        label_visibility="collapsed",
+        on_change=_sync_nav,
+        format_func=lambda s: f":material/{SECTIONS[s][0]}: {s}",
+    )
+
+# ==================================================================
+# 1. OVERVIEW
+# ==================================================================
+if nav == "Overview":
+    guide(
+        "Read this tab top to bottom. Each panel answers one question, and every number "
+        "follows the <b>segment filters</b> panel (open it with the arrow at the top left)."
+    )
+
+    with panel("headline", "The headline", "The single most important finding for this segment.", "spark"):
+        st.markdown(
+            f'<p class="lede">The leading reason shoppers save is <b>{html.escape(top_motive_label.lower())}</b>. '
+            f"The purchase then stalls on <b>{html.escape(top_blocker_label.lower())}</b> — the largest named "
+            f"blocker at <b>{top_blocker_share:.0f}%</b>, with the top two together holding back "
+            f"<b>{top2_share:.0f}%</b> of stalled purchases.</p>"
+            f'<p class="lede-note"><b style="color:{INK};">{no_discount_share:.0f}%</b> '
+            f"({no_discount_n:,} of {BASE_N:,}) are addressable by product and UX changes alone. "
+            f"Another {top_price_share:.0f}% are waiting for a price drop, which no product change fixes "
+            f"without discounting. The remaining {unresolved_share:.0f}% hit the taxonomy's catch-all or "
+            "had no blocker recorded. Every percentage on this tab is a share of the "
+            f"{BASE_N:,} signals in the current slice.</p>",
+            unsafe_allow_html=True,
+        )
+
+    with panel("kpis", "Key numbers", "The size and quality of the evidence behind everything below.", "layers"):
+        k1, k2, k3, k4 = st.columns(4, gap="medium")
+        with k1:
+            stat("Items analysed", f"{len(df):,}", "Across iOS, Android and YouTube", "layers")
+        with k2:
+            stat("Wishlist signals", f"{len(view):,}", f"{_share:.0f}% of relevant corpus in view", "bookmark")
+        with k3:
+            stat("High friction", f"{high_sev_share:.0f}%", "Signals rated high severity", "alert")
+        with k4:
+            stat("Confidence", f"{confidence_rate:.0f}%", "Classified at medium or high confidence", "check")
+
+    c_left, c_right = st.columns(2, gap="medium")
+
+    # Buckets that exist as a reason to save but can never be a reason a purchase
+    # is stalled - which is why the two charts do not have the same number of bars.
+    motive_only = sorted(
+        set(view["save_motive"].dropna().unique()) - set(view["current_blocker"].dropna().unique())
+    )
 
     with c_left:
-        st.markdown("### 💡 Why Customers Save Items (Motives)")
-        st.caption("Top underlying intents when adding an item to wishlist")
-        motive_df = view["save_motive"].value_counts().reset_index()
-        motive_df.columns = ["Motive", "Count"]
-        motive_df["Motive"] = motive_df["Motive"].apply(bucket_label)
-
-        fig_motive = px.bar(
-            motive_df,
-            x="Count",
-            y="Motive",
-            orientation="h",
-            color="Count",
-            color_continuous_scale=[[0, "#FFCCD7"], [0.5, "#FF758F"], [1, "#FF3F6C"]],
-        )
-        fig_motive.update_layout(
-            showlegend=False,
-            margin=dict(l=10, r=10, t=10, b=10),
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#282C3F", family="DM Sans, sans-serif"),
-            xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
-            yaxis=dict(categoryorder="total ascending", showgrid=False),
-            height=320,
-        )
-        st.plotly_chart(fig_motive, use_container_width=True)
+        with panel(
+            "motives",
+            "Why customers save",
+            f"Every save-motive bucket, as a share of all {BASE_N:,} signals in this slice.",
+            "bookmark",
+        ):
+            m_top = ranked_counts(view["save_motive"], normalize=True, denom=BASE_N)
+            st.plotly_chart(
+                magnitude_bars(m_top.index, m_top.values, suffix="%", hover_noun="of all signals"),
+                use_container_width=True,
+                config=PLOTLY_CONFIG,
+                key="chart_motives",
+            )
+            _m_blank = BASE_N - int(view["save_motive"].notna().sum())
+            st.caption(
+                f"{len(m_top)} buckets · bars total {m_top.sum():.0f}%; the remaining "
+                f"{_m_blank / BASE_N * 100:.0f}% ({_m_blank:,} signals) had no motive recorded."
+            )
 
     with c_right:
-        st.markdown("### 🛑 What Blocks the Purchase Now")
-        st.caption("Immediate hurdles stalling checkout conversion")
-        blocker_df = view["current_blocker"].value_counts().reset_index()
-        blocker_df.columns = ["Blocker", "Count"]
-        blocker_df["Blocker"] = blocker_df["Blocker"].apply(bucket_label)
+        with panel(
+            "blockers",
+            "What blocks the purchase",
+            f"Every blocker bucket, as a share of the same {BASE_N:,} signals.",
+            "alert",
+        ):
+            b_top = ranked_counts(view["current_blocker"], normalize=True, denom=BASE_N)
+            st.plotly_chart(
+                magnitude_bars(b_top.index, b_top.values, suffix="%", hover_noun="of all signals"),
+                use_container_width=True,
+                config=PLOTLY_CONFIG,
+                key="chart_blockers",
+            )
+            _b_blank = BASE_N - int(view["current_blocker"].notna().sum())
+            _mo = ", ".join(bucket_label(k).lower() for k in motive_only)
+            st.caption(
+                f"{len(b_top)} buckets · bars total {b_top.sum():.0f}%; the remaining "
+                f"{_b_blank / BASE_N * 100:.0f}% ({_b_blank:,} signals) had no blocker recorded."
+                + (
+                    f" Fewer bars than on the left because {_mo} are reasons to save, never reasons a "
+                    "purchase is stalled."
+                    if motive_only
+                    else ""
+                )
+            )
 
-        fig_blocker = px.bar(
-            blocker_df,
-            x="Count",
-            y="Blocker",
-            orientation="h",
-            color="Count",
-            color_continuous_scale=[[0, "#FED7AA"], [0.5, "#FB923C"], [1, "#EA580C"]],
-        )
-        fig_blocker.update_layout(
-            showlegend=False,
-            margin=dict(l=10, r=10, t=10, b=10),
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#282C3F", family="DM Sans, sans-serif"),
-            xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
-            yaxis=dict(categoryorder="total ascending", showgrid=False),
-            height=320,
-        )
-        st.plotly_chart(fig_blocker, use_container_width=True)
+    with panel(
+        "residual",
+        "What is in “Other / unspecified”?",
+        "The taxonomy's catch-all, broken out so nothing is hidden behind one bar.",
+        "info",
+    ):
+        r_blocker, blocker_n = residual_breakdown(view["current_blocker"])
+        r_motive, motive_n = residual_breakdown(view["save_motive"])
 
-    st.divider()
-
-    # Ranked Opportunity Table
-    st.markdown("### 🏆 Ranked UX Opportunity Matrix")
-    st.caption("Opportunity Score = Share of Blockers × Avg Severity × Coverage Gap. Ranks highest ROI product improvements.")
-    opp_df = score_opportunities(view)
-    if not opp_df.empty:
-        max_opp_score = max(1.0, float(opp_df["Opportunity Score"].max()))
-        st.dataframe(
-            opp_df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Opportunity Score": st.column_config.ProgressColumn(
-                    "Opportunity Score",
-                    help="Composite metric evaluating frequency, user pain level, and competitive white-space",
-                    format="%.1f",
-                    min_value=0,
-                    max_value=max_opp_score,
-                ),
-            },
+        r1, r2 = st.columns(2, gap="medium")
+        for col, counts, total_n, name in (
+            (r1, r_motive, motive_n, "save motives"),
+            (r2, r_blocker, blocker_n, "blockers"),
+        ):
+            with col:
+                if counts.empty:
+                    st.markdown(f"**No residual {name}** — every signal landed in a named bucket.")
+                    continue
+                lines = "".join(
+                    f'<div class="insight-row" style="padding:.55rem 0;">'
+                    f'<p style="flex:1;"><strong>{html.escape(bucket_label(str(k)))}</strong> '
+                    f'<span style="color:{MUTED};">({html.escape(str(k))})</span></p>'
+                    f'<p style="font-variant-numeric:tabular-nums;font-weight:600;">{v:,} '
+                    f'<span style="color:{MUTED};font-weight:400;">· {v / total_n * 100:.1f}%</span></p></div>'
+                    for k, v in counts.items()
+                )
+                st.markdown(
+                    f'<div style="font-size:.85rem;font-weight:600;letter-spacing:.05em;'
+                    f'text-transform:uppercase;color:{MUTED};margin-bottom:.5rem;">In {name}</div>{lines}',
+                    unsafe_allow_html=True,
+                )
+        st.caption(
+            "`other` is what the model returned when a signal fit no bucket; `none` is an explicit "
+            "“no blocker stated”. Both are counted in every total but never lead a ranking."
         )
+
+    with panel(
+        "matrix",
+        "Ranked opportunity matrix",
+        "Share of blockers × average severity × coverage gap. Highest score = highest-ROI fix.",
+        "trend",
+    ):
+        opp_df = score_opportunities(view)
+        if not opp_df.empty:
+            st.dataframe(
+                opp_df,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Opportunity": st.column_config.TextColumn("Opportunity", width="large"),
+                    "Share": st.column_config.NumberColumn("Share of blockers", format="%.1f%%"),
+                    "Signals": st.column_config.NumberColumn("Signals", format="%d"),
+                    "Avg severity": st.column_config.NumberColumn(
+                        "Avg severity", help="1 = low, 3 = high", format="%.2f"
+                    ),
+                    "Score": st.column_config.ProgressColumn(
+                        "Opportunity score",
+                        help="Composite of frequency, user pain and competitive white space",
+                        format="%.1f",
+                        min_value=0,
+                        max_value=max(1.0, float(opp_df["Score"].max())),
+                    ),
+                },
+            )
+        else:
+            st.info("No opportunity data for this slice. Widen the filters to see the ranking.")
+
+    with panel(
+        "platforms",
+        "Blockers by platform",
+        "Where iOS, Android and YouTube audiences diverge. Each bar is a share of that platform's own blockers.",
+        "grid",
+    ):
+        plat = view.copy()
+        plat["platform"] = plat["source"].apply(platform_of)
+        cross = (
+            plat[plat["platform"].isin(PLATFORM_COLORS)]
+            .groupby(["platform", "current_blocker"])
+            .size()
+            .unstack(fill_value=0)
+        )
+
+        if cross.empty:
+            st.info("Not enough cross-platform data in this slice.")
+        else:
+            pct_cross = cross.div(cross.sum(axis=1), axis=0) * 100
+            # Five named blockers keep the grouped bars legible; residual buckets are dropped.
+            keep = [c for c in cross.sum().sort_values(ascending=False).index if str(c).lower() not in RESIDUAL_KEYS][:5]
+            pct_cross = pct_cross[keep]
+            pct_cross.columns = [bucket_label(c) for c in pct_cross.columns]
+            plot_df = pct_cross.T.reset_index().rename(columns={"index": "Blocker"})
+            plot_df = plot_df.melt(id_vars="Blocker", var_name="Platform", value_name="% Share")
+            st.plotly_chart(grouped_platform_bars(plot_df), use_container_width=True, config=PLOTLY_CONFIG, key="chart_platforms")
+
+
+# ==================================================================
+# 2. DEEP DIVES
+# ==================================================================
+if nav == "Deep dives":
+    guide("Pick a pillar below. Each one is a chart plus the reading of it, on a single screen.")
+
+    with panel("pillars", "Strategic deep dives", "Four pillars answering the research brief.", "target"):
+        pillar = st.radio(
+            "Pillar",
+            ["Intent & motives", "Blockers & uncertainty", "Search leakage", "ROI roadmap"],
+            key="pillar",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+    # Every pillar below reuses the SAME element keys - "pillarchart", "pillarread"
+    # and chart key "chart_pillar" - on purpose. Giving each pillar its own keys
+    # changes the element tree's identity when the selection changes, which
+    # remounts the enclosing st.tabs component and silently throws the user back
+    # to the first tab. Keep these keys identical across all four branches.
+    if pillar == "Intent & motives":
+        left, right = st.columns([1.15, 1], gap="medium")
+        with left:
+            with panel(
+                "pillarchart",
+                "Save motives",
+                f"Every intent, as a share of all {len(rel):,} relevant signals.",
+                "bookmark",
+            ):
+                sm = ranked_counts(rel["save_motive"], normalize=True, denom=len(rel))
+                st.plotly_chart(
+                    magnitude_bars(sm.index, sm.values, suffix="%", hover_noun="of all signals"),
+                    use_container_width=True,
+                    config=PLOTLY_CONFIG,
+                    key="chart_pillar",
+                )
+        with right:
+            with panel("pillarread", "What this tells us", "", "spark", divider=False):
+                _ws_n, _ws_d, _ws_p = share(rel, "save_motive", "window_shopping", base=rel)
+                _cmp_n, _, _cmp_p = share(
+                    rel, "save_motive", "in_app_comparison", "cross_platform_comparison", base=rel
+                )
+                _risk_n, _, _risk_p = share(
+                    rel, "save_motive", "price_waiting", "quality_authenticity_doubt",
+                    "fit_size_uncertainty", base=rel
+                )
+                insight_rows(
+                    [
+                        (
+                            "Active risk management.",
+                            f"<b>{_risk_p:.0f}%</b> of saves ({_risk_n:,}) are price, quality or fit doubt — "
+                            "shoppers deferring financial commitment until they resolve a specific risk, "
+                            "not casually bookmarking.",
+                        ),
+                        (
+                            "Real intent, not browsing.",
+                            f"Only <b>{_ws_p:.1f}%</b> ({_ws_n:,} signals) are explicit zero-intent window "
+                            "shopping — the wishlist is overwhelmingly a considered-purchase list.",
+                        ),
+                        (
+                            "Consideration sets.",
+                            f"<b>{_cmp_p:.1f}%</b> ({_cmp_n:,}) save specifically to compare items, in the app "
+                            "or against another site.",
+                        ),
+                    ]
+                )
+                st.caption(f"Shares are of all {_ws_d:,} relevant signals.")
+
+    elif pillar == "Blockers & uncertainty":
+        left, right = st.columns([1.15, 1], gap="medium")
+        with left:
+            with panel(
+                "pillarchart",
+                "Residual uncertainty",
+                f"What is still unresolved, as a share of all {len(rel):,} relevant signals.",
+                "alert",
+            ):
+                unc = ranked_counts(rel["uncertainty_type"], normalize=True, denom=len(rel))
+                st.plotly_chart(
+                    magnitude_bars(unc.index, unc.values, suffix="%", hover_noun="of all signals"),
+                    use_container_width=True,
+                    config=PLOTLY_CONFIG,
+                    key="chart_pillar",
+                )
+        with right:
+            with panel("pillarread", "What this tells us", "", "spark", divider=False):
+                _qm_n, _base_n, _qm_p = share(rel, "save_motive", "quality_authenticity_doubt", base=rel)
+                _qb_n, _, _qb_p = share(rel, "current_blocker", "quality_authenticity_doubt", base=rel)
+                _oos_n, _, _oos_p = share(rel, "current_blocker", "out_of_stock", base=rel)
+                _shift = _qb_p - _qm_p
+                insight_rows(
+                    [
+                        (
+                            "The quality spike.",
+                            f"Quality and authenticity doubt is the motive for <b>{_qm_p:.1f}%</b> of saves "
+                            f"({_qm_n:,}) but the blocker for <b>{_qb_p:.1f}%</b> ({_qb_n:,}) — a "
+                            f"{_shift:+.1f} point rise between saving and checking out, as shoppers read "
+                            "critical reviews.",
+                        ),
+                        (
+                            "The stockout trap.",
+                            f"<b>{_oos_p:.1f}%</b> ({_oos_n:,}) delay long enough that they return to find "
+                            "their exact size gone.",
+                        ),
+                        (
+                            "Postponement drivers.",
+                            "Shoppers wait for sale cycles such as Diwali and EORS, or stall because they "
+                            "dread the return process if the size is wrong. "
+                            "<i>Qualitative — read from the quotes, not counted.</i>",
+                        ),
+                    ]
+                )
+                st.caption(f"Shares are of all {_base_n:,} relevant signals.")
+
+    elif pillar == "Search leakage":
+        left, right = st.columns([1.15, 1], gap="medium")
+        with left:
+            with panel(
+                "pillarchart",
+                "Where shoppers go instead",
+                "External channels used to resolve doubt. Signal counts, not shares.",
+                "compass",
+            ):
+                ch = ranked_counts(rel["external_channel"], n=8)
+                st.plotly_chart(
+                    magnitude_bars(ch.index, ch.values, hover_noun="signals"),
+                    use_container_width=True,
+                    config=PLOTLY_CONFIG,
+                    key="chart_pillar",
+                )
+                st.caption(
+                    "Shown as counts on purpose: only a small minority of signals name a channel at all, "
+                    "so a percentage would be misleadingly small against the corpus and misleadingly "
+                    "confident against the subset."
+                )
+        with right:
+            with panel("pillarread", "What this tells us", "", "spark", divider=False):
+                _named_ch = stated(rel, "external_channel", drop=("none", "nan", "unclear", ""))
+                _ch_total = len(_named_ch)
+                _rivals = int(_named_ch.isin(["amazon", "flipkart", "meesho", "ajio", "nykaa"]).sum())
+                _rival_p = (_rivals / _ch_total * 100) if _ch_total else 0
+                _video_n = int(_named_ch.isin(["youtube", "instagram", "social media"]).sum())
+                _video_p = (_video_n / _ch_total * 100) if _ch_total else 0
+                insight_rows(
+                    [
+                        (
+                            "They leave for rival marketplaces.",
+                            f"<b>{_rival_p:.0f}%</b> of named external channels ({_rivals:,} of {_ch_total:,}) "
+                            "are Amazon, Flipkart, Meesho, AJIO or Nykaa — visited for customer unboxing "
+                            "photos and inch measurements that studio shots hide.",
+                        ),
+                        (
+                            "Video shows up, but rarely in this field.",
+                            f"Only <b>{_video_n}</b> signals ({_video_p:.0f}%) name YouTube or social video "
+                            "here. The try-on-haul behaviour is visible in the YouTube quotes themselves, "
+                            "so treat this field as under-reporting it rather than as evidence against it.",
+                        ),
+                        (
+                            "The multi-order hack.",
+                            "With no in-app comparison, shoppers order two or three sizes intending from the "
+                            "start to return the losers. <i>Qualitative — read from the quotes, not counted.</i>",
+                        ),
+                    ]
+                )
+                st.caption(
+                    f"Only {_ch_total:,} of {len(rel):,} signals name an external channel, so these shares "
+                    "are of that subset — not of the whole corpus."
+                )
+
     else:
-        st.info("No opportunity data available for the active filter slice.")
+        with panel(
+            "p4",
+            "Prioritised roadmap",
+            "Five interventions, ranked by the signal actually behind them.",
+            "rocket",
+        ):
+            N = len(rel)
 
-    st.divider()
+            def _sig(column, *keys):
+                n, _, p = share(rel, column, *keys, base=rel)
+                return n, p
 
-    # Cross Platform Distribution
-    st.markdown("### 📱 Blocker Divergence Across Platforms")
-    st.caption("Comparative analysis highlighting behavioral differences across iOS, Android, and Social channels.")
+            def _high_sev(*keys):
+                sub = rel[rel["current_blocker"].isin(keys)]
+                return (sub["severity"] == "high").mean() * 100 if len(sub) else 0.0
 
-    plat = view.copy()
-    plat["platform"] = plat["source"].apply(
-        lambda s: "iOS" if str(s).startswith("appstore") else "Android" if str(s) == "playstore" else "YouTube" if str(s) == "youtube" else "Manual/Other"
+            fit_n, fit_p = _sig("current_blocker", "fit_size_uncertainty")
+            qual_n, qual_p = _sig("current_blocker", "quality_authenticity_doubt")
+            cmp_n, cmp_p = _sig("save_motive", "in_app_comparison", "cross_platform_comparison")
+            oos_n, oos_p = _sig("current_blocker", "out_of_stock")
+            price_n, price_p = _sig("current_blocker", "price_waiting")
+            sty_n, sty_p = _sig("current_blocker", "styling_uncertainty")
+
+            st.markdown(
+                f"""
+| # | Opportunity | Friction solved | Signal in this corpus | Intervention |
+| :- | :--- | :--- | :--- | :--- |
+| **1** | **Verified UGC & video hub** | `quality_authenticity_doubt` | **{qual_p:.1f}%** ({qual_n:,}) · #1 blocker · {_high_sev("quality_authenticity_doubt"):.0f}% high severity | Verified customer unboxing photos, daylight fabric zoom, customer try-on video in the wishlist drawer |
+| **2** | **Price & restock alerts** | `price_waiting`, `out_of_stock` | **{price_p:.1f}%** ({price_n:,}) price waiting · **{oos_p:.1f}%** ({oos_n:,}) stockouts | One-click WhatsApp restock alerts plus a 48-hour price lock, without discounting |
+| **3** | **Interactive fit & size matrix** | `fit_size_uncertainty` | **{fit_p:.1f}%** ({fit_n:,}) · {_high_sev("fit_size_uncertainty"):.0f}% high severity | Cross-brand fit translation (*"fits like Zara M"*), exact inch measurements, body visualiser |
+| **4** | **In-wishlist comparison tray** | `in_app_comparison`, `cross_platform_comparison` | **{cmp_p:.1f}%** ({cmp_n:,}) of save motives | Side-by-side spec tray inside the wishlist: fabric, ratings, price, returnability |
+| **5** | **'Complete the look' styler** | `styling_uncertainty` | **{sty_p:.1f}%** ({sty_n:,}) · smallest of the five | Algorithmic bundling of matching footwear and bottoms already in inventory, one-click add |
+"""
+            )
+            st.caption(
+                f"Every share above is computed live from the corpus, over all {N:,} relevant signals. "
+                "Ranking follows signal volume and severity. Expected-impact estimates are deliberately "
+                "omitted: this corpus measures stated friction, not conversion, so it cannot support a "
+                "conversion-lift number."
+            )
+
+
+# ==================================================================
+# 3. AI COPILOT
+# ==================================================================
+if nav == "AI copilot":
+    guide(
+        "Type a question, or tap a suggestion. The copilot searches the corpus first, "
+        "then answers <b>only from the signals it found</b> — and shows you those signals."
     )
-
-    cross = plat[plat["platform"].isin(["iOS", "Android", "YouTube"])].groupby(["platform", "current_blocker"]).size().unstack(fill_value=0)
-
-    if not cross.empty:
-        pct_cross = cross.div(cross.sum(axis=1), axis=0) * 100
-        pct_cross.columns = [bucket_label(c) for c in pct_cross.columns]
-
-        plot_df = pct_cross.T.reset_index().rename(columns={"index": "Blocker"})
-        plot_df = plot_df.melt(id_vars="Blocker", var_name="Platform", value_name="% Share")
-
-        fig_plat = px.bar(
-            plot_df,
-            x="Blocker",
-            y="% Share",
-            color="Platform",
-            barmode="group",
-            color_discrete_map={"iOS": "#3B82F6", "Android": "#10B981", "YouTube": "#EF4444"},
-        )
-        fig_plat.update_layout(
-            margin=dict(l=10, r=10, t=20, b=10),
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#282C3F", family="DM Sans, sans-serif"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            xaxis=dict(showgrid=False),
-            yaxis=dict(showgrid=True, gridcolor="#EAEAEC", title="% of Platform Corpus"),
-            height=380,
-        )
-        st.plotly_chart(fig_plat, use_container_width=True)
-
-
-# ==================================================================
-# TAB 2: STRATEGIC DEEP DIVES (4 CLEAN PILLARS)
-# ==================================================================
-with tab_blueprint:
-    st.markdown("### 🎯 Strategic Deep Dives & Brief Solutions")
-    st.caption("Explore structured analysis answering the core research questions across 4 focused strategic pillars.")
-
-    p_tab1, p_tab2, p_tab3, p_tab4 = st.tabs(
-        [
-            "💡 1. Intent & Motives",
-            "🛑 2. Blockers & Uncertainties",
-            "🌐 3. Search Leakage & Hacks",
-            "🚀 4. Prioritized ROI Roadmap",
-        ]
-    )
-
-    # PILLAR 1
-    with p_tab1:
-        col_p1_left, col_p1_right = st.columns([1, 1])
-        with col_p1_left:
-            st.markdown("#### 💡 Save Motives Distribution")
-            sm_df = rel["save_motive"].value_counts(normalize=True).head(6).reset_index()
-            sm_df.columns = ["Motive", "Share"]
-            sm_df["Share %"] = sm_df["Share"] * 100
-            sm_df["Motive Label"] = sm_df["Motive"].apply(bucket_label)
-
-            fig_p1 = px.bar(
-                sm_df,
-                x="Share %",
-                y="Motive Label",
-                orientation="h",
-                color="Share %",
-                color_continuous_scale=[[0, "#FFCCD7"], [1, "#FF3F6C"]],
-            )
-            fig_p1.update_layout(
-                height=300,
-                margin=dict(l=10, r=20, t=10, b=10),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#282C3F", family="DM Sans, sans-serif"),
-                yaxis=dict(categoryorder="total ascending", showgrid=False),
-                xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
-                showlegend=False,
-            )
-            st.plotly_chart(fig_p1, use_container_width=True)
-
-        with col_p1_right:
-            st.markdown(
-                """
-            <div class="pillar-card">
-                <h4>🎯 Key Strategic Insights on Intent</h4>
-                <p><b>1. Active Risk Management:</b> Users add items to wishlists not as casual bookmarks, but to defer financial commitment while resolving doubts about price, size, or authenticity.</p>
-                <p><b>2. Intent vs. Window Shopping:</b> Only <b>5.2%</b> of items represent zero-intent window shopping. Over <b>94%+</b> of users exhibit genuine shopping consideration.</p>
-                <p><b>3. Consideration Set Building:</b> 7.8% of saves are explicitly created to compare 3–5 similar silhouettes side-by-side.</p>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-    # PILLAR 2
-    with p_tab2:
-        col_p2_left, col_p2_right = st.columns([1, 1])
-        with col_p2_left:
-            st.markdown("#### 🔍 Residual Uncertainty Hierarchy")
-            unc_df = rel["uncertainty_type"].dropna().loc[lambda x: (x != "none") & (x != "nan")].value_counts().reset_index()
-            unc_df.columns = ["Uncertainty", "Count"]
-            unc_df["Label"] = unc_df["Uncertainty"].apply(lambda x: bucket_label(x))
-
-            fig_p2 = px.pie(
-                unc_df,
-                names="Label",
-                values="Count",
-                hole=0.45,
-                color_discrete_sequence=["#FF3F6C", "#FF8A5B", "#F59E0B", "#10B981", "#6366F1"],
-            )
-            fig_p2.update_layout(
-                height=300,
-                margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#282C3F", family="DM Sans, sans-serif"),
-            )
-            st.plotly_chart(fig_p2, use_container_width=True)
-
-        with col_p2_right:
-            st.markdown(
-                """
-            <div class="pillar-card">
-                <h4>🛑 Conversion Blockers & Postponement</h4>
-                <p><b>1. The Quality Spike:</b> Quality & authenticity doubt rises from 17.2% at inception to <b>23.2% at checkout</b> as users read critical reviews.</p>
-                <p><b>2. The Stockout Trap (11.9%):</b> Delaying purchase causes users to return only to find their exact size sold out.</p>
-                <p><b>3. Postponement Drivers:</b> Users postpone checkout to sync with major sale cycles (Diwali, EORS) or because they dread return hassles if the size fails.</p>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-    # PILLAR 3
-    with p_tab3:
-        col_p3_left, col_p3_right = st.columns([1, 1])
-        with col_p3_left:
-            st.markdown("#### 🌐 External Channel Leakage Distribution")
-            ch_df = rel["external_channel"].dropna().loc[lambda x: (x != "none") & (x != "nan")].value_counts().head(6).reset_index()
-            ch_df.columns = ["Channel", "Count"]
-            ch_df["Channel Name"] = ch_df["Channel"].apply(lambda x: str(x).title())
-
-            fig_p3 = px.bar(
-                ch_df,
-                x="Count",
-                y="Channel Name",
-                orientation="h",
-                color="Count",
-                color_continuous_scale=[[0, "#FF8A5B"], [1, "#FF3F6C"]],
-            )
-            fig_p3.update_layout(
-                height=300,
-                margin=dict(l=10, r=20, t=10, b=10),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#282C3F", family="DM Sans, sans-serif"),
-                yaxis=dict(categoryorder="total ascending", showgrid=False),
-                xaxis=dict(showgrid=True, gridcolor="#EAEAEC"),
-                showlegend=False,
-            )
-            st.plotly_chart(fig_p3, use_container_width=True)
-
-        with col_p3_right:
-            st.markdown(
-                """
-            <div class="pillar-card">
-                <h4>⚖️ Comparison & External Validation Hacks</h4>
-                <p><b>1. Why Users Leave the App:</b> Users leak to <b>Amazon & Flipkart (54%)</b> to find unboxing customer photos and inch measurements that brand studio shots hide.</p>
-                <p><b>2. YouTube Try-On Hauls:</b> Customers watch influencer videos to verify fabric transparency, drape, and true daylight color.</p>
-                <p><b>3. The 'Multi-Order & Return' Hack:</b> Lacking in-app comparison tools, users order 2–3 sizes/styles with the premeditated plan to return the losers.</p>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-    # PILLAR 4
-    with p_tab4:
-        st.markdown("#### 🚀 Top 5 Prioritized Feature Roadmap & ROI Matrix")
-        st.markdown(
-            """
-        | # | Strategic Product Opportunity | Targeted Friction | Quantified Signal | Proposed UX Feature Intervention | Expected Metric Impact |
-        | :- | :--- | :--- | :--- | :--- | :--- |
-        | **1** | **Interactive Fit & Size Matrix** | `fit_size_uncertainty` | 13.9% of doubts; 58% high severity | Cross-brand fit translation (*"Fits like Zara M"*), exact inch measurements, body visualizer | **+15-18% Checkout Conversion**; **-22% Size Returns** |
-        | **2** | **Verified Real-Life UGC & Video Hub** | `quality_authenticity_doubt` | #1 Blocker (23.2% of corpus) | Verified customer unboxing photos, daylight fabric zoom, customer video try-ons in Wishlist drawer | **+12% Conversion Lift** on fabric doubt items |
-        | **3** | **In-Wishlist Smart Comparison Tray** | `in_app_comparison` & `cross_platform` | 7.8% save motives | Side-by-side spec comparison tray inside Wishlist (fabric, ratings, prices, returnability) | Eliminates leakage to Amazon / Flipkart |
-        | **4** | **Predictive Price & Smart Restock Alerts** | `price_waiting` & `out_of_stock` | 11.9% stockouts; 20.2% price waiting | Instant 1-click WhatsApp restock alerts + 48-hour price-lock guarantee without discounting | **Recovers ~40% of stockout abandonments** |
-        | **5** | **'Complete The Look' Wishlist Styler** | `styling_uncertainty` | 2.2% blockers | Algorithmic bundling suggesting exact matching footwear/bottoms already in inventory with 1-click bundle add | **+14% Average Order Value (AOV)** |
-        """
-        )
-
-
-# ==================================================================
-# TAB 3: ASK THE CORPUS (AI COPILOT)
-# ==================================================================
-with tab_copilot:
-    st.markdown("### 🤖 Ask the Discovery Engine (AI Copilot)")
-    st.caption("Ask any custom research or product strategy question across the 10,000+ customer review corpus.")
 
     def set_copilot_prompt(prompt_text):
         st.session_state["copilot_input_box"] = prompt_text
         st.session_state["run_copilot_now"] = True
 
-    if "copilot_input_box" not in st.session_state:
-        st.session_state["copilot_input_box"] = ""
-    if "run_copilot_now" not in st.session_state:
-        st.session_state["run_copilot_now"] = False
+    st.session_state.setdefault("copilot_input_box", "")
+    st.session_state.setdefault("run_copilot_now", False)
 
-    # Quick Question Chips
-    st.markdown("##### 💡 Suggested Questions to Ask:")
-    q_col1, q_col2, q_col3 = st.columns(3)
-    with q_col1:
-        st.button(
-            "👟 Footwear Sizing Hesitations",
+    with panel(
+        "ask",
+        "Ask the corpus",
+        f"Any research or product question, put to the {len(rel):,} classified customer signals.",
+        "spark",
+    ):
+        q1, q2, q3 = st.columns(3, gap="small")
+        q1.button(
+            "Footwear sizing hesitation",
             on_click=set_copilot_prompt,
             args=("Why do users hesitate when buying footwear and what are the main sizing issues?",),
-            use_container_width=True,
+            width="stretch",
         )
-    with q_col2:
-        st.button(
-            "👗 Fabric Quality Complaints",
+        q2.button(
+            "Fabric quality complaints",
             on_click=set_copilot_prompt,
-            args=("What are the most common complaints about fabric quality, material transparency, and color bleeding?",),
-            use_container_width=True,
+            args=("What are the most common complaints about fabric quality, material transparency, and colour bleeding?",),
+            width="stretch",
         )
-    with q_col3:
-        st.button(
-            "📱 iOS Wishlist Abandonment",
+        q3.button(
+            "iOS vs Android abandonment",
             on_click=set_copilot_prompt,
             args=("What are the primary reasons iOS users abandon wishlists compared to Android users?",),
-            use_container_width=True,
+            width="stretch",
         )
 
-    user_query = st.text_input(
-        "Type your custom question about customer behavior or wishlist blockers:",
-        placeholder="e.g. How does return friction influence checkout? What do women say about ethnic wear?",
-        key="copilot_input_box",
-    )
+        st.markdown('<div class="spacer-sm"></div>', unsafe_allow_html=True)
 
-    btn_clicked = st.button("✨ Ask AI Copilot", type="primary")
+        st.text_input(
+            "Your question",
+            placeholder="e.g. How does return friction influence checkout? What do women say about ethnic wear?",
+            key="copilot_input_box",
+        )
+        btn_clicked = st.button("Ask the copilot", type="primary", icon=":material/send:")
+
     should_run = btn_clicked or st.session_state.get("run_copilot_now", False)
     st.session_state["run_copilot_now"] = False
 
-    if should_run:
+    if not should_run:
+        with panel("askhelp", "What you get back", "Every answer comes in these four parts.", "info", divider=False):
+            insight_rows(
+                [
+                    ("An executive summary.", "Two or three sentences answering the question directly."),
+                    ("Quantitative patterns.", "Concrete observations drawn from the matched signals, not general knowledge."),
+                    ("Verbatim evidence.", "The actual customer quotes behind the answer, each attributed to its source and blocker."),
+                    ("A recommendation.", "One product or UX intervention that follows from the evidence."),
+                ]
+            )
+    else:
         query_to_run = st.session_state.get("copilot_input_box", "").strip()
         if not query_to_run:
-            st.warning("Please enter or select a question to analyze.")
+            st.warning("Enter a question, or pick one of the suggestions above.")
         else:
-            with st.spinner("Searching 10,000+ customer signals & synthesizing executive response..."):
+            with st.spinner("Searching the corpus and synthesising an answer…"):
                 try:
-                    # Token search across corpus
                     tokens = [
                         t.lower()
                         for t in re.findall(r"\w+", query_to_run)
-                        if len(t) > 2 and t.lower() not in {"what", "why", "how", "when", "the", "and", "for", "with", "about", "are", "is"}
+                        if len(t) > 2
+                        and t.lower() not in {"what", "why", "how", "when", "the", "and", "for", "with", "about", "are", "is"}
                     ]
 
                     matches = []
                     for _, row in rel.iterrows():
                         score = 0
-                        full_str = f"{row.get('text', '')} {row.get('evidence_quote', '')} {row.get('current_blocker', '')} {row.get('save_motive', '')} {row.get('segment_category', '')} {row.get('segment_gender', '')} {row.get('workaround', '')}".lower()
+                        full_str = (
+                            f"{row.get('text', '')} {row.get('evidence_quote', '')} {row.get('current_blocker', '')} "
+                            f"{row.get('save_motive', '')} {row.get('segment_category', '')} "
+                            f"{row.get('segment_gender', '')} {row.get('workaround', '')}"
+                        ).lower()
                         for t in tokens:
                             if t in full_str:
                                 score += 1
@@ -865,18 +1673,22 @@ with tab_copilot:
                         src = str(r.get("source", "user"))
                         blk = bucket_label(str(r.get("current_blocker", "")))
                         wa = str(r.get("workaround")) if pd.notna(r.get("workaround")) else "None"
-                        quotes_context.append(f"- [{src}] (Blocker: {blk} | Workaround: {wa}) \"{q}\"")
+                        quotes_context.append(f'- [{src}] (Blocker: {blk} | Workaround: {wa}) "{q}"')
 
                     context_str = "\n".join(quotes_context)
 
                     system_prompt = f"""You are the Chief AI Research Strategist for the Wishlist Discovery Engine analyzing an e-commerce customer corpus of 10,000+ reviews (Myntra, AJIO, iOS App Store, Play Store, YouTube).
 Answer the user's question directly, insightfully, and objectively based on the verified customer signals provided below.
 
-Format your response cleanly with:
-### 📌 Executive Summary (2-3 crisp sentences answering the question)
-### 📊 Key Quantitative Insights & Behavioral Patterns (bullet points with concrete observations)
-### 💬 Verbatim Customer Evidence (quote 2-3 of the most relevant quotes from the context with attribution)
-### 🚀 Strategic Product & UX Recommendation (actionable product feature proposal)
+Format your response cleanly with these exact section headings (no emoji):
+### Executive summary
+(2-3 crisp sentences answering the question)
+### Key quantitative insights
+(bullet points with concrete observations)
+### Verbatim customer evidence
+(quote 2-3 of the most relevant quotes from the context with attribution)
+### Recommendation
+(one actionable product or UX proposal)
 
 Context Customer Signals:
 {context_str}
@@ -884,62 +1696,79 @@ Context Customer Signals:
                     from llm import LLMRouter
 
                     router = LLMRouter(verbose=False)
-                    # json_mode=False enables free-form executive Markdown generation
-                    answer, provider = router.complete(system_prompt, f"Question: {query_to_run}", max_tokens=1500, json_mode=False)
+                    answer, provider = router.complete(
+                        system_prompt, f"Question: {query_to_run}", max_tokens=1500, json_mode=False
+                    )
 
-                    st.markdown("---")
-                    st.caption(f"🤖 **AI Copilot Response** · Powered by `{provider.upper()}`")
-                    st.markdown(answer)
+                    with panel(
+                        "answer",
+                        "Answer",
+                        f"Generated by {provider.upper()} from {len(top_matches)} matched signals.",
+                        "spark",
+                    ):
+                        st.markdown(answer)
 
-                    # Ground truth inspection expander with clean styling
-                    with st.expander(f"🔍 Ground Truth Evidence: View {len(top_matches)} Customer Signals Used"):
+                    with panel("evidence_used", "The evidence behind it", "Every signal the answer was built from.", "quote"):
                         for r in top_matches:
                             q_item = r.get("evidence_quote") if pd.notna(r.get("evidence_quote")) else r.get("text")
-                            st.markdown(f"• **[{str(r.get('source')).upper()}]** *\"{q_item}\"*  \n  <small style='color: #64748B;'>Blocker: <b>{bucket_label(str(r.get('current_blocker')))}</b> | Workaround: <b>{str(r.get('workaround')) if pd.notna(r.get('workaround')) else 'None'}</b></small>", unsafe_allow_html=True)
+                            wa = str(r.get("workaround")) if pd.notna(r.get("workaround")) else "None"
+                            st.markdown(
+                                f'<div style="padding:.85rem 0;border-bottom:1px solid rgba(28,30,46,.07);">'
+                                f'<div style="font-size:.97rem;color:{INK};line-height:1.6;">'
+                                f'"{html.escape(str(q_item))}"</div>'
+                                f'<div style="font-size:.83rem;color:{MUTED};margin-top:.4rem;">'
+                                f"{html.escape(str(r.get('source')).upper())} · "
+                                f"{html.escape(bucket_label(str(r.get('current_blocker'))))} · "
+                                f"workaround: {html.escape(wa)}</div></div>",
+                                unsafe_allow_html=True,
+                            )
 
                 except Exception as ex:
-                    st.error(f"Failed to generate answer: {ex}")
+                    st.error(f"Could not generate an answer: {ex}")
 
 
 # ==================================================================
-# TAB 4: VOICE OF CUSTOMER (EVIDENCE LABORATORY)
+# 4. VOICE OF CUSTOMER
 # ==================================================================
-with tab_evidence:
-    st.markdown("### 💬 Voice of Customer & Evidence Repository")
-    st.caption("Explore verbatim quotes, qualitative signals, and customer coping workarounds with structured metadata.")
+if nav == "Voice of customer":
+    guide("Set the filters, then read the quotes. Each card is one customer signal with the labels the model gave it.")
 
-    # Filter Controls for Evidence
-    ec1, ec2, ec3, ec4 = st.columns([3, 2, 2, 3])
+    with panel("vocfilters", "Find the evidence", "Narrow by blocker, severity or channel, or search the text.", "search"):
+        ec1, ec2, ec3, ec4 = st.columns([3, 2, 2, 3], gap="small")
 
-    with ec1:
-        blocker_options = sorted(view["current_blocker"].dropna().unique().tolist())
-        selected_blocker = st.selectbox(
-            "Filter by Blocker Category",
-            ["All Blockers"] + blocker_options,
-            format_func=lambda x: "All Blockers" if x == "All Blockers" else f"{bucket_label(x)} ({len(view[view['current_blocker']==x])})",
-        )
+        with ec1:
+            blocker_options = sorted(view["current_blocker"].dropna().unique().tolist())
+            selected_blocker = st.selectbox(
+                "Blocker",
+                ["All"] + blocker_options,
+                format_func=lambda x: "All blockers"
+                if x == "All"
+                else f"{bucket_label(x)} ({len(view[view['current_blocker'] == x])})",
+            )
+        with ec2:
+            selected_sev = st.selectbox(
+                "Severity", ["All", "high", "medium", "low"],
+                format_func=lambda x: "All severities" if x == "All" else x.capitalize(),
+            )
+        with ec3:
+            selected_source = st.selectbox(
+                "Channel", ["All", "playstore", "appstore", "youtube"],
+                format_func=lambda x: {
+                    "All": "All channels",
+                    "playstore": PLATFORM_NAMES["Android"],
+                    "appstore": PLATFORM_NAMES["iOS"],
+                    "youtube": PLATFORM_NAMES["YouTube"],
+                }[x],
+            )
+        with ec4:
+            search_query = st.text_input("Search quotes", placeholder="size, kurta, refund, fabric…")
 
-    with ec2:
-        selected_sev = st.selectbox("Severity Level", ["All Severities", "high", "medium", "low"], format_func=lambda x: x.capitalize())
-
-    with ec3:
-        platforms = ["All Platforms", "playstore", "appstore", "youtube"]
-        selected_source = st.selectbox(
-            "Channel / Platform",
-            platforms,
-            format_func=lambda x: "All Channels" if x == "All Platforms" else "Google Play" if x == "playstore" else "iOS App Store" if x == "appstore" else "YouTube" if x == "youtube" else x,
-        )
-
-    with ec4:
-        search_query = st.text_input("🔍 Search Quote Content", placeholder="e.g. size, kurta, refund, return, fabric...")
-
-    # Filter quotes
     q_df = view.copy()
-    if selected_blocker != "All Blockers":
+    if selected_blocker != "All":
         q_df = q_df[q_df["current_blocker"] == selected_blocker]
-    if selected_sev != "All Severities":
+    if selected_sev != "All":
         q_df = q_df[q_df["severity"] == selected_sev]
-    if selected_source != "All Platforms":
+    if selected_source != "All":
         if selected_source == "appstore":
             q_df = q_df[q_df["source"].astype(str).str.startswith("appstore")]
         else:
@@ -951,134 +1780,129 @@ with tab_evidence:
             | q_df["workaround"].astype(str).str.contains(search_query, case=False, na=False)
         ]
 
-    # Display count banner
+    quotes_to_show = q_df.dropna(subset=["evidence_quote"]).head(18)
+
     st.markdown(
-        f"<div style='color: #94A3B8; font-size: 0.88rem; margin: 0.75rem 0 1.25rem 0;'>"
-        f"Displaying <b>{len(q_df):,}</b> verified customer signals matching your criteria."
-        f"</div>",
+        f'<div style="font-size:.92rem;color:{MUTED};margin:0 .25rem 1.1rem .25rem;">'
+        f"<b style=\"color:{BODY};\">{len(q_df):,}</b> signals match · showing {len(quotes_to_show)}</div>",
         unsafe_allow_html=True,
     )
 
-    if q_df.empty:
-        st.info("No quotes matched the selected filters. Try broadening your criteria or search query.")
+    if quotes_to_show.empty:
+        st.info("No quotes match these filters. Clear the search box or widen the blocker and severity filters.")
     else:
-        # Render quotes in 2-column grid
-        quotes_to_show = q_df.dropna(subset=["evidence_quote"]).head(18)
-        cols = st.columns(2)
+        cols = st.columns(2, gap="medium")
 
         for idx, (_, row) in enumerate(quotes_to_show.iterrows()):
-            col_target = cols[idx % 2]
-
-            src = str(row.get("source", "")).lower()
-            if "appstore" in src:
-                src_badge = '<span class="badge badge-ios">🍏 iOS App Store</span>'
-            elif "playstore" in src:
-                src_badge = '<span class="badge badge-android">🤖 Google Play</span>'
-            elif "youtube" in src:
-                src_badge = '<span class="badge badge-youtube">▶️ YouTube</span>'
-            else:
-                src_badge = '<span class="badge badge-manual">📝 Forum / Review</span>'
+            plat_name = platform_of(row.get("source", ""))
+            plat_display = PLATFORM_NAMES.get(plat_name, "Forum / review")
+            # Unknown sources have no store mark, so they keep the coloured dot.
+            plat_mark = platform_logo(plat_name, 17) or (
+                f'<span class="dot" style="background:{MUTED}"></span>'
+            )
 
             sev = str(row.get("severity", "low")).lower()
-            if sev == "high":
-                sev_badge = '<span class="badge badge-sev-high">🔴 High Friction</span>'
-            elif sev == "medium":
-                sev_badge = '<span class="badge badge-sev-med">🟡 Medium Friction</span>'
-            else:
-                sev_badge = '<span class="badge badge-sev-low">🟢 Low Friction</span>'
+            sev_class, sev_word = {
+                "high": ("sev-high", "High friction"),
+                "medium": ("sev-med", "Medium friction"),
+            }.get(sev, ("sev-low", "Low friction"))
 
             blocker_name = bucket_label(str(row.get("current_blocker", "")))
             quote_text = html.escape(str(row.get("evidence_quote", "")))
 
             workaround_html = ""
-            if pd.notna(row.get("workaround")) and str(row.get("workaround")).strip() and str(row.get("workaround")).lower() != "none":
-                workaround_clean = html.escape(str(row.get("workaround")))
-                workaround_html = f'<div class="workaround-tag">🛠️ <b>User Workaround:</b> {workaround_clean}</div>'
-
-            # Metadata tags (filter out 'none', 'unclear', 'nan')
-            meta_items = []
-            g_val = str(row.get("segment_gender", "")).lower()
-            if g_val not in ["unclear", "none", "nan", ""]:
-                meta_items.append(f"👤 {row['segment_gender']}")
-
-            c_val = str(row.get("segment_category", "")).lower()
-            if c_val not in ["unclear", "none", "nan", ""]:
-                meta_items.append(f"👗 {row['segment_category']}")
-
-            o_val = str(row.get("segment_occasion", "")).lower()
-            if o_val not in ["unclear", "none", "nan", ""]:
-                meta_items.append(f"🎉 {row['segment_occasion']}")
-
-            meta_str = " • ".join(meta_items) if meta_items else f"🏷️ {blocker_name}"
-
-            with col_target:
-                # Remove leading whitespace so Markdown never misinterprets lines as code blocks (<pre><code>)
-                card_html = (
-                    f'<div class="evidence-card">'
-                    f'<div class="evidence-header">'
-                    f'<div>{src_badge} {sev_badge}</div>'
-                    f'<span style="font-size: 0.75rem; color: #64748B; font-weight: 600;">{blocker_name}</span>'
-                    f'</div>'
-                    f'<div class="evidence-quote">“{quote_text}”</div>'
-                    f'{workaround_html}'
-                    f'<div class="evidence-footer">'
-                    f'<span>{meta_str}</span>'
-                    f'<span>Confidence: <b>{str(row.get("confidence", "high")).capitalize()}</b></span>'
-                    f'</div>'
-                    f'</div>'
+            wa_raw = row.get("workaround")
+            if pd.notna(wa_raw) and str(wa_raw).strip() and str(wa_raw).lower() not in ("none", "null"):
+                workaround_html = (
+                    f'<div class="workaround">{icon("wrench", 15)}'
+                    f"<span><b>Workaround:</b> {html.escape(str(wa_raw))}</span></div>"
                 )
-                st.markdown(card_html, unsafe_allow_html=True)
+
+            meta_items = []
+            for field in ("segment_gender", "segment_category", "segment_occasion"):
+                val = str(row.get(field, "")).strip()
+                if val.lower() not in ("unclear", "none", "nan", ""):
+                    meta_items.append(html.escape(val))
+            meta_str = " · ".join(meta_items) if meta_items else "Segment unspecified"
+
+            with cols[idx % 2]:
+                st.markdown(
+                    f'<div class="evidence">'
+                    f'<div class="meta-top">'
+                    f'<span class="src">{plat_mark}{plat_display}</span>'
+                    f'<span class="sev {sev_class}">{sev_word}</span>'
+                    f"</div>"
+                    f'<div class="quote">{quote_text}</div>'
+                    f"{workaround_html}"
+                    f'<div class="meta-bot"><span class="tag">{html.escape(blocker_name)}</span>'
+                    f"<span>{meta_str}</span></div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
         if len(q_df) > 18:
-            st.caption(f"Showing top 18 of {len(q_df):,} matching quotes. Use the search bar above to narrow down specific topics.")
+            st.caption(f"Showing the first 18 of {len(q_df):,} matches. Narrow the search to see specific topics.")
 
-    # Distinct Section: Customer Behavioral Workarounds
-    st.markdown("<div style='height: 2rem;'></div>", unsafe_allow_html=True)
-    st.markdown("### 🛠️ Common Customer Workarounds & Behavioral Hacks")
-    st.caption("How shoppers currently cope with decision uncertainty when the app lacks features.")
+    st.markdown('<div class="spacer-lg"></div>', unsafe_allow_html=True)
+
+    with panel(
+        "wahead",
+        "How shoppers cope today",
+        "Behavioural workarounds invented because the app has no built-in answer.",
+        "wrench",
+        divider=False,
+    ):
+        pass
 
     workarounds = (
         view["workaround"]
         .dropna()
         .apply(lambda x: str(x).strip())
-        .loc[lambda x: (x != "") & (x.str.lower() != "none") & (x.str.lower() != "null")]
+        .loc[lambda x: (x != "") & (~x.str.lower().isin(["none", "null"]))]
         .value_counts()
-        .head(12)
+        .head(9)
     )
 
-    if not workarounds.empty:
-        w_cols = st.columns(3)
+    if workarounds.empty:
+        st.info("No workarounds recorded in this slice.")
+    else:
+        w_cols = st.columns(3, gap="medium")
         for i, (wa_text, wa_count) in enumerate(workarounds.items()):
             with w_cols[i % 3]:
                 st.markdown(
-                    f'<div style="background: #FFFFFF; border: 1px solid #EAEAEC; border-radius: 10px; padding: 0.9rem; margin-bottom: 0.75rem; box-shadow: 0 2px 8px rgba(40, 44, 63, 0.04);">'
-                    f'<div style="font-size: 0.88rem; color: #282C3F; font-weight: 500;">"{html.escape(wa_text)}"</div>'
-                    f'<div style="font-size: 0.75rem; color: #FF3F6C; margin-top: 0.4rem; font-weight: 700;">Mentioned {wa_count} times</div>'
-                    f'</div>',
+                    f'<div class="wa-card"><div class="txt">"{html.escape(wa_text)}"</div>'
+                    f'<div class="cnt">Mentioned {wa_count:,} times</div></div>',
                     unsafe_allow_html=True,
                 )
 
 
 # ==================================================================
-# TAB 5: LIVE AI EXTRACTOR
+# 5. HOW IT WORKS
 # ==================================================================
-with tab_demo:
-    st.markdown("### ⚡ Live AI Classification Playground")
-    st.caption("Test the LLM categorization prompt in real time on any raw customer review or social media excerpt.")
+if nav == "How it works":
+    guide("Try the classifier on your own text, then read how the corpus was built.")
 
-    sample_text = (
-        "I have like 40 things in my Myntra wishlist. There's this one kurta "
-        "I've been eyeing for two months but I'm a size M in some brands and L "
-        "in others so I keep putting it off. Ended up checking Amazon to see if "
-        "the same brand had a size guide there."
-    )
+    with panel(
+        "extractor",
+        "Live extractor",
+        "Run the classification prompt on any raw review. The result is written to the dataset and every chart refreshes.",
+        "flask",
+    ):
+        sample_text = (
+            "I have like 40 things in my Myntra wishlist. There's this one kurta "
+            "I've been eyeing for two months but I'm a size M in some brands and L "
+            "in others so I keep putting it off. Ended up checking Amazon to see if "
+            "the same brand had a size guide there."
+        )
 
-    input_text = st.text_area("Paste customer conversation / review text here:", value=sample_text, height=130)
+        input_text = st.text_area("Customer review or conversation", value=sample_text)
+        run_extract = st.button("Run extraction", type="primary", icon=":material/play_arrow:")
 
-    if st.button("🚀 Run & Register AI Extraction", type="primary"):
-        with st.spinner("Classifying with LLM Router & saving to dataset..."):
+    if run_extract:
+        with st.spinner("Classifying with the LLM router…"):
             try:
                 import csv
+
                 from extract import FIELDNAMES, build_system_prompt
                 from llm import LLMRouter, parse_json_response
 
@@ -1086,7 +1910,6 @@ with tab_demo:
                 raw_response, provider = router.complete(build_system_prompt(), f"[1] {input_text}", max_tokens=1500)
                 extracted_json = parse_json_response(raw_response)[0]
 
-                # Automatically persist to active dataset
                 new_id = str(uuid.uuid4())
                 record = {
                     "id": new_id,
@@ -1117,54 +1940,50 @@ with tab_demo:
                     writer.writerow(record)
                     f.flush()
 
-                # Invalidate Streamlit cache so all charts and metrics refresh
                 st.cache_data.clear()
 
-                st.success(
-                    f"✅ **Extracted by {provider} & registered to the active dataset!** "
-                    f"(Record ID: `{new_id[:8]}` written to `data/extracted.csv`). "
-                    "All dashboard metrics, charts, and evidence cards have been updated live."
-                )
+                with panel("extractout", "Extraction result", f"Written to `data/extracted.csv` as record `{new_id[:8]}`.", "check"):
+                    st.success(f"Extracted by {provider}. All charts and metrics now include it.")
 
-                if not extracted_json.get("relevant"):
-                    st.warning(
-                        "⚠️ Classified as **Not Relevant** to wishlist decision-making. "
-                        "(App reviews regarding logistics, returns, or bugs are counted towards total items, but filtered from blocker charts)."
-                    )
-                else:
-                    d1, d2, d3 = st.columns(3)
-                    d1.metric("Save Motive", bucket_label(extracted_json.get("save_motive", "—")))
-                    d2.metric("Current Blocker", bucket_label(extracted_json.get("current_blocker", "—")))
-                    d3.metric("Severity", str(extracted_json.get("severity", "—")).capitalize())
+                    if not extracted_json.get("relevant"):
+                        st.warning(
+                            "Classified as **not relevant** to wishlist decision-making. Reviews about "
+                            "logistics, returns or app bugs count towards the total but are excluded from the blocker charts."
+                        )
+                    else:
+                        d1, d2, d3 = st.columns(3, gap="medium")
+                        with d1:
+                            stat("Save motive", bucket_label(extracted_json.get("save_motive", "—")), icon_name="bookmark")
+                        with d2:
+                            stat("Current blocker", bucket_label(extracted_json.get("current_blocker", "—")), icon_name="alert")
+                        with d3:
+                            stat("Severity", str(extracted_json.get("severity", "—")).capitalize(), icon_name="trend")
 
-                    st.markdown("#### Structured JSON Payload")
-                    st.json(extracted_json)
+                        with st.expander("Structured JSON payload"):
+                            st.json(extracted_json)
 
             except Exception as ex:
                 st.error(f"Extraction failed: {ex}")
 
+    with panel("method", "Methodology", "How the corpus was collected, classified and scored.", "compass"):
+        st.markdown(
+            """
+##### 1 · Multi-channel data harvesting
+- **Google Play** — long-form reviews via `google-play-scraper`; reviews under 25 characters are dropped.
+- **Apple App Store** — India, US, UK and UAE storefronts, to capture premium fashion demographics.
+- **YouTube** — comments on unboxing, try-on haul and comparison videos via the YouTube Data API.
 
-# ==================================================================
-# TAB 6: METHODOLOGY & PIPELINE
-# ==================================================================
-with tab_method:
-    st.markdown("### 🔬 Research Methodology & Analytical Architecture")
-    st.caption("Detailed overview of our multi-stage AI extraction and validation methodology.")
+##### 2 · AI structured extraction
+- **Router** — Gemini 1.5 Flash with a Groq LLaMA 3.3 70B fallback.
+- **No keyword bias** — every item is classified without pre-filtering on the word "wishlist", so the sample is not selected on the outcome being measured.
+- **Taxonomy disentanglement** — **save motive** (why it was added) is decoupled from **current blocker** (what prevents purchase now). The two are frequently different, and conflating them is what makes most wishlist analysis misleading.
+- **Key folding** — the model sometimes returns the short alias for a bucket (`price` instead of `price_waiting`). Aliases are folded into their canonical bucket on load, so one blocker never appears as two rows with the same name. Anything outside the taxonomy is counted under **Other / unspecified** — shown, never dropped, and broken out in full on the Overview tab.
 
-    st.markdown(
-        """
-    #### 1. Multi-Channel Data Harvesting
-    - **Google Play Store:** Automated extraction of long-form reviews via `google-play-scraper`. Short reviews (<25 chars) filtered out.
-    - **Apple iOS App Store:** International storefront collection (India, US, UK, UAE) to capture high-spending, premium fashion demographics.
-    - **YouTube Hauls & Reviews:** Keyword scraping of unboxing, try-on hauls, and comparison comments via YouTube Data API.
-
-    #### 2. AI Structured Extraction
-    - **LLM Pipeline:** Gemini 1.5 Flash & Groq LLaMA 3.3 70B router.
-    - **Zero Keyword Bias:** Every item is evaluated without keyword filtering on "wishlist", eliminating sampling bias before categorization.
-    - **Taxonomy Disentanglement:** Crucially decouples **Save Motive** (why an item was added) from **Current Blocker** (what prevents purchase now).
-
-    #### 3. Opportunity Scoring Algorithm
-    $$Score = \\text{Blocker Frequency (\\%)} \\times \\text{Average Severity (1-3)} \\times \\text{Coverage Gap}$$
-    - Evaluates unmet consumer demand against current market UX benchmarks.
-    """
-    )
+##### 3 · Opportunity scoring
+"""
+        )
+        st.markdown("$$Score = \\text{Blocker frequency (\\%)} \\times \\text{Average severity (1–3)} \\times \\text{Coverage gap}$$")
+        st.markdown(
+            "Coverage gap is a manual 0–1 estimate of how poorly the current product serves that blocker, "
+            "so a frequent-but-well-served problem ranks below a rarer one with no existing solution."
+        )
