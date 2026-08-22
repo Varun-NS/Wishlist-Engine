@@ -5,3 +5,8 @@ __pycache__/
 venv/
 data/raw_*.csv
 .venv/
+
+# local backups and experimental corpora from the taxonomy audit (13MB)
+data/archive/
+# intermediate report HTML; the PDF is the deliverable
+reports/*.html

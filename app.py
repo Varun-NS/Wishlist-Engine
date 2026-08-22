@@ -303,6 +303,30 @@ h1, h2, h3, h4, h5, h6 {
     font-size: .85rem; color: var(--muted);
 }
 
+/* ---------- Live extraction result ---------- */
+.extract-quote {
+    display: flex; gap: .7rem; align-items: flex-start;
+    background: var(--brand-soft);
+    border-radius: var(--radius-lg);
+    padding: .9rem 1.1rem;
+    font-size: 1rem; line-height: 1.6; color: var(--ink);
+}
+.extract-quote svg { flex-shrink: 0; margin-top: .28rem; }
+.extract-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0 1.4rem;
+}
+.extract-grid .cell {
+    display: flex; flex-direction: column; gap: .15rem;
+    padding: .7rem 0;
+    border-top: 1px solid var(--line-soft);
+}
+.extract-grid .k {
+    font-size: .74rem; font-weight: 600; letter-spacing: .05em;
+    text-transform: uppercase; color: var(--muted);
+}
+.extract-grid .v { font-size: .97rem; color: var(--ink); line-height: 1.5; }
+
 /* ---------- Tags & pills ---------- */
 .src { display: inline-flex; align-items: center; gap: .45rem; font-size: .85rem; font-weight: 600; color: var(--body); }
 .src .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
@@ -404,6 +428,12 @@ section[data-testid="stSidebar"] .block-container { padding-top: 2.25rem; }
     font-family: 'Outfit', sans-serif; font-size: 1.05rem; font-weight: 600;
     color: var(--ink); margin-bottom: .3rem;
 }
+.provenance {
+    font-size: .82rem; color: var(--muted); line-height: 1.5;
+    margin-top: .9rem; padding: .65rem .8rem; border-radius: 10px;
+    background: rgba(28,30,46,.04); box-shadow: inset 0 0 0 1px rgba(28,30,46,.08);
+}
+.provenance b { color: var(--body); font-weight: 600; }
 .side-note { font-size: .89rem; color: var(--muted); line-height: 1.6; margin-bottom: 1.1rem; }
 .slice-card {
     background: rgba(255,255,255,.8);
@@ -792,6 +822,45 @@ def grouped_platform_bars(plot_df, height=400):
 PLOTLY_CONFIG = {"displayModeBar": False, "responsive": True}
 
 DATA_PATH = "data/extracted.csv"
+RECLASSIFIED_PATH = "data/extracted_v3.csv"
+
+
+def _row_count(path):
+    """CSV records, not lines - review text contains embedded newlines."""
+    import csv as _csv
+
+    stat = os.stat(path)
+    return _cached_row_count(path, stat.st_size, stat.st_mtime)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_row_count(path, _size, _mtime):
+    import csv as _csv
+
+    with open(path, encoding="utf-8", newline="") as f:
+        return max(0, sum(1 for _ in _csv.reader(f)) - 1)
+
+
+def resolve_dataset():
+    """Pick the dataset to read, and say plainly which one and why.
+
+    The reclassification run writes extracted_v2.csv incrementally, so a partial
+    file must never be shown as if it were the corpus - every percentage would be
+    computed against a fraction of the data. v2 is only used once it covers at
+    least as many rows as v1.
+    """
+    if not os.path.exists(RECLASSIFIED_PATH):
+        return DATA_PATH, "original", ""
+    try:
+        v1, v2 = _row_count(DATA_PATH), _row_count(RECLASSIFIED_PATH)
+    except OSError:
+        return DATA_PATH, "original", ""
+    if v2 >= v1:
+        return RECLASSIFIED_PATH, "reclassified", ""
+    return DATA_PATH, "original", (
+        f"A reclassification run is in progress ({v2:,} of {v1:,} rows). "
+        "Showing the original dataset until it completes."
+    )
 
 
 # ------------------------------------------------------------------
@@ -813,10 +882,15 @@ CANONICAL_KEYS = {
 
 
 @st.cache_data
-def load_data():
-    if not os.path.exists(DATA_PATH):
+def load_data(path=DATA_PATH):
+    if not os.path.exists(path):
         return None
-    df = pd.read_csv(DATA_PATH)
+    df = pd.read_csv(path)
+    if "id" in df.columns:
+        before = len(df)
+        df = df.drop_duplicates(subset="id", keep="last")
+        if len(df) != before:
+            df.attrs["dupes_dropped"] = before - len(df)
     df["relevant"] = df["relevant"].astype(str).str.lower().isin(["true", "1"])
 
     for col in ("save_motive", "current_blocker"):
@@ -851,15 +925,29 @@ bridge_secrets()
 RESIDUAL_KEYS = {"other", "none", "nan", "unclear", "unspecified", "uncertainty", "uncertainty_type", ""}
 RESIDUAL_LABEL = "Other / unspecified"
 
+# "not_applicable" is NOT a residual bucket. It means the question does not apply
+# to that row - a shopper describing a failed delivery never saved anything, so
+# there is no save motive to report. Charting it alongside the buckets would read
+# as a classification failure; it is excluded from the motive chart and its count
+# is stated instead.
+NOT_APPLICABLE = "not_applicable"
 
-def _label_frame(series):
-    """Clean keys, drop blanks, and split residual buckets from named ones."""
+
+def _label_frame(series, drop=()):
+    """Clean keys, drop blanks and any excluded values, split residual from named."""
     keys = series.dropna().astype(str).str.strip().str.lower()
     keys = keys[keys != ""]
+    if drop:
+        keys = keys[~keys.isin(drop)]
     return keys, keys.isin(RESIDUAL_KEYS)
 
 
-def ranked_counts(series, n=99, normalize=False, denom=None):
+def count_value(series, value):
+    """How many rows carry exactly this key."""
+    return int((series.dropna().astype(str).str.strip().str.lower() == value).sum())
+
+
+def ranked_counts(series, n=99, normalize=False, denom=None, drop=()):
     """Counts by *display label*, residual buckets folded into one row at the bottom.
 
     Aggregating on the label rather than the raw key matters: the extractor emits
@@ -874,7 +962,7 @@ def ranked_counts(series, n=99, normalize=False, denom=None):
     in the app; the bars then sum to under 100% by exactly the not-recorded share,
     which each caller states.
     """
-    keys, residual = _label_frame(series)
+    keys, residual = _label_frame(series, drop)
     total = len(keys)
     if not total:
         return pd.Series(dtype=float)
@@ -892,9 +980,9 @@ def ranked_counts(series, n=99, normalize=False, denom=None):
     return named
 
 
-def leading_label(series):
+def leading_label(series, drop=()):
     """Label, count and total for the top *named* bucket - used in headline copy."""
-    keys, residual = _label_frame(series)
+    keys, residual = _label_frame(series, drop)
     named = keys[~residual].map(bucket_label).value_counts()
     if named.empty:
         return "—", 0, max(1, len(keys))
@@ -987,7 +1075,8 @@ def score_opportunities(df):
 # ------------------------------------------------------------------
 # Load dataset
 # ------------------------------------------------------------------
-df = load_data()
+ACTIVE_PATH, DATA_LABEL, DATA_NOTE = resolve_dataset()
+df = load_data(ACTIVE_PATH)
 
 if df is None:
     st.error("No dataset found at `data/extracted.csv`. Run the extraction pipeline first.")
@@ -1079,6 +1168,13 @@ st.sidebar.markdown(
 )
 
 
+st.sidebar.markdown(
+    f'<div class="provenance"><b>Dataset</b> {html.escape(DATA_LABEL)}'
+    f'{" · " + html.escape(DATA_NOTE) if DATA_NOTE else ""}</div>',
+    unsafe_allow_html=True,
+)
+
+
 def reset_filters():
     for key in FILTER_KEYS:
         st.session_state[key] = "All"
@@ -1108,7 +1204,7 @@ BASE_N = len(view)
 # residual of the taxonomy, not a finding, so it never leads the sentence.
 top_blocker_label, top_blocker_n, _ = leading_label(view["current_blocker"])
 top_blocker_share = top_blocker_n / BASE_N * 100 if BASE_N else 0
-top_motive_label, _, _ = leading_label(view["save_motive"])
+top_motive_label, _, _ = leading_label(view["save_motive"], drop=(NOT_APPLICABLE,))
 
 named_blockers = blocker_counts[[k for k in blocker_counts.index if str(k).lower() not in RESIDUAL_KEYS]]
 top2_share = (named_blockers.head(2).sum() / BASE_N * 100) if BASE_N else 0
@@ -1125,6 +1221,20 @@ top_price_share = (_price_n / BASE_N * 100) if BASE_N else 0
 # Everything left: the catch-all, an explicit "no blocker", or no blocker recorded.
 unresolved_n = BASE_N - no_discount_n - _price_n
 unresolved_share = (unresolved_n / BASE_N * 100) if BASE_N else 0
+# Two kinds of evidence, deliberately not pooled: someone describing a wishlist
+# they are sitting on, vs someone describing friction they already hit that would
+# deter them next time. v1 has no signal_type column, so this stays empty there.
+REBUCKETED_N = int((df.get("rebucket_confidence", pd.Series(dtype=str)).fillna("") != "").sum())
+DROPPED_N = int((df.get("dropped_category", pd.Series(dtype=str)).fillna("") != "").sum())
+
+HAS_SIGNAL_TYPE = "signal_type" in view.columns and view["signal_type"].notna().any()
+if HAS_SIGNAL_TYPE:
+    _st = view["signal_type"].dropna().astype(str).str.strip().str.lower()
+    OBSERVED_N = int(_st.isin(["unresolved_doubt", "observed_hesitation"]).sum())
+    DETERRENT_N = int(_st.isin(["proven_doubt", "deterrent_experience"]).sum())
+else:
+    OBSERVED_N = DETERRENT_N = 0
+
 high_sev_share = (view["severity"] == "high").mean() * 100 if len(view) else 0
 low_conf = (view["confidence"] == "low").sum()
 confidence_rate = ((len(view) - low_conf) / len(view) * 100) if len(view) else 0
@@ -1205,14 +1315,24 @@ if nav == "Overview":
         with k3:
             stat("High friction", f"{high_sev_share:.0f}%", "Signals rated high severity", "alert")
         with k4:
-            stat("Confidence", f"{confidence_rate:.0f}%", "Classified at medium or high confidence", "check")
+            if HAS_SIGNAL_TYPE:
+                stat(
+                    "Evidence mix",
+                    f"{OBSERVED_N / max(1, OBSERVED_N + DETERRENT_N) * 100:.0f}% unresolved",
+                    f"{OBSERVED_N:,} still hesitating · {DETERRENT_N:,} already bought and got burned",
+                    "layers",
+                )
+            else:
+                stat("Confidence", f"{confidence_rate:.0f}%", "Classified at medium or high confidence", "check")
 
     c_left, c_right = st.columns(2, gap="medium")
 
     # Buckets that exist as a reason to save but can never be a reason a purchase
     # is stalled - which is why the two charts do not have the same number of bars.
     motive_only = sorted(
-        set(view["save_motive"].dropna().unique()) - set(view["current_blocker"].dropna().unique())
+        set(view["save_motive"].dropna().unique())
+        - set(view["current_blocker"].dropna().unique())
+        - {NOT_APPLICABLE}  # not a bucket - the question simply does not apply
     )
 
     with c_left:
@@ -1222,18 +1342,31 @@ if nav == "Overview":
             f"Every save-motive bucket, as a share of all {BASE_N:,} signals in this slice.",
             "bookmark",
         ):
-            m_top = ranked_counts(view["save_motive"], normalize=True, denom=BASE_N)
+            _na = count_value(view["save_motive"], NOT_APPLICABLE)
+            _motive_base = max(1, BASE_N - _na)
+            m_top = ranked_counts(
+                view["save_motive"], normalize=True, denom=_motive_base, drop=(NOT_APPLICABLE,)
+            )
             st.plotly_chart(
-                magnitude_bars(m_top.index, m_top.values, suffix="%", hover_noun="of all signals"),
+                magnitude_bars(m_top.index, m_top.values, suffix="%", hover_noun="of saved signals"),
                 use_container_width=True,
                 config=PLOTLY_CONFIG,
                 key="chart_motives",
             )
-            _m_blank = BASE_N - int(view["save_motive"].notna().sum())
-            st.caption(
-                f"{len(m_top)} buckets · bars total {m_top.sum():.0f}%; the remaining "
-                f"{_m_blank / BASE_N * 100:.0f}% ({_m_blank:,} signals) had no motive recorded."
+            _m_blank = _motive_base - int(
+                view["save_motive"].notna().sum() - _na
             )
+            _cap = (
+                f"{len(m_top)} buckets · bars total {m_top.sum():.0f}%; the remaining "
+                f"{max(0, _m_blank) / _motive_base * 100:.0f}% had no motive recorded."
+            )
+            if _na:
+                _cap += (
+                    f" Base is {_motive_base:,}, not {BASE_N:,}: {_na:,} signals describe friction "
+                    "the shopper already hit rather than an item they saved, so \"why did they save "
+                    "it\" has no answer for them."
+                )
+            st.caption(_cap)
 
     with c_right:
         with panel(
@@ -1265,7 +1398,7 @@ if nav == "Overview":
     with panel(
         "residual",
         "What is in “Other / unspecified”?",
-        "The taxonomy's catch-all, broken out so nothing is hidden behind one bar.",
+        "Shoppers describing a real problem that none of the 11 buckets names — audited, not a dumping ground.",
         "info",
     ):
         r_blocker, blocker_n = residual_breakdown(view["current_blocker"])
@@ -1294,8 +1427,11 @@ if nav == "Overview":
                     unsafe_allow_html=True,
                 )
         st.caption(
-            "`other` is what the model returned when a signal fit no bucket; `none` is an explicit "
-            "“no blocker stated”. Both are counted in every total but never lead a ranking."
+            "This bucket has been audited. Every signal in it was re-examined against the 11 buckets: "
+            f"{REBUCKETED_N} were re-filed into a bucket that did fit, and {DROPPED_N} were removed from "
+            "the corpus entirely as praise, app bugs, creator requests or viewer chatter. What is left is "
+            "a genuine shopping problem with no bucket for it. `none` is an explicit “no blocker stated”. "
+            "Neither ever leads a ranking."
         )
 
     with panel(
@@ -1383,10 +1519,14 @@ if nav == "Deep dives":
             with panel(
                 "pillarchart",
                 "Save motives",
-                f"Every intent, as a share of all {len(rel):,} relevant signals.",
+                f"Every intent, as a share of the {max(1, len(rel) - count_value(rel['save_motive'], NOT_APPLICABLE)):,} signals where someone actually saved an item.",
                 "bookmark",
             ):
-                sm = ranked_counts(rel["save_motive"], normalize=True, denom=len(rel))
+                _na_all = count_value(rel["save_motive"], NOT_APPLICABLE)
+                _sm_base = max(1, len(rel) - _na_all)
+                sm = ranked_counts(
+                    rel["save_motive"], normalize=True, denom=_sm_base, drop=(NOT_APPLICABLE,)
+                )
                 st.plotly_chart(
                     magnitude_bars(sm.index, sm.values, suffix="%", hover_noun="of all signals"),
                     use_container_width=True,
@@ -1932,12 +2072,30 @@ if nav == "How it works":
                     "provider": provider,
                 }
 
+                # Write against the file's ACTUAL header, not a hardcoded list.
+                # The two drift apart - the audit added provenance columns and
+                # extract.py added signal_type - and DictWriter would then append
+                # a row whose values land in the wrong columns, silently
+                # corrupting the corpus rather than failing.
+                if os.path.exists(DATA_PATH):
+                    with open(DATA_PATH, newline="", encoding="utf-8") as f:
+                        header = next(csv.reader(f), list(FIELDNAMES))
+                else:
+                    header = list(FIELDNAMES)
+
+                unknown = [k for k in record if k not in header]
+                if unknown:
+                    st.warning(
+                        "These fields have no column in `data/extracted.csv` and were not saved: "
+                        + ", ".join(f"`{k}`" for k in unknown)
+                    )
+
                 write_header = not os.path.exists(DATA_PATH)
                 with open(DATA_PATH, "a", newline="", encoding="utf-8") as f:
-                    writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+                    writer = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
                     if write_header:
                         writer.writeheader()
-                    writer.writerow(record)
+                    writer.writerow({k: record.get(k, "") for k in header})
                     f.flush()
 
                 st.cache_data.clear()
@@ -1948,7 +2106,8 @@ if nav == "How it works":
                     if not extracted_json.get("relevant"):
                         st.warning(
                             "Classified as **not relevant** to wishlist decision-making. Reviews about "
-                            "logistics, returns or app bugs count towards the total but are excluded from the blocker charts."
+                            "logistics, app bugs or generic praise count towards the total but are "
+                            "excluded from the blocker charts."
                         )
                     else:
                         d1, d2, d3 = st.columns(3, gap="medium")
@@ -1959,8 +2118,52 @@ if nav == "How it works":
                         with d3:
                             stat("Severity", str(extracted_json.get("severity", "—")).capitalize(), icon_name="trend")
 
-                        with st.expander("Structured JSON payload"):
-                            st.json(extracted_json)
+                    # The remaining fields, read as a table rather than raw JSON.
+                    # "n" is the model's internal batch index and means nothing here.
+                    def _val(key):
+                        v = extracted_json.get(key)
+                        if v is None or str(v).strip().lower() in ("", "none", "null", "nan", "unclear"):
+                            return None
+                        return str(v)
+
+                    quote = _val("evidence_quote")
+                    if quote:
+                        st.markdown('<div class="spacer-md"></div>', unsafe_allow_html=True)
+                        st.markdown(
+                            f'<div class="extract-quote">{icon("quote", 15, BRAND_INK)}'
+                            f"<span>{html.escape(quote)}</span></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    detail = [
+                        ("Uncertainty", bucket_label(_val("uncertainty_type")) if _val("uncertainty_type") else None),
+                        ("Went to", _val("external_channel").title() if _val("external_channel") else None),
+                        ("Workaround", _val("workaround")),
+                        ("Shopper", _val("segment_gender")),
+                        ("Category", _val("segment_category")),
+                        ("Price tier", _val("segment_price_tier")),
+                        ("Occasion", _val("segment_occasion")),
+                        ("Confidence", _val("confidence").capitalize() if _val("confidence") else None),
+                    ]
+                    shown = [(k, v) for k, v in detail if v]
+                    if shown:
+                        st.markdown('<div class="spacer-sm"></div>', unsafe_allow_html=True)
+                        st.markdown(
+                            '<div class="extract-grid">'
+                            + "".join(
+                                f'<div class="cell"><span class="k">{html.escape(k)}</span>'
+                                f'<span class="v">{html.escape(v)}</span></div>'
+                                for k, v in shown
+                            )
+                            + "</div>",
+                            unsafe_allow_html=True,
+                        )
+                    blank = [k for k, v in detail if not v]
+                    if blank:
+                        st.caption("Not stated in the text: " + ", ".join(blank).lower() + ".")
+
+                    with st.expander("Raw model output"):
+                        st.json({k: v for k, v in extracted_json.items() if k != "n"})
 
             except Exception as ex:
                 st.error(f"Extraction failed: {ex}")
@@ -1977,7 +2180,15 @@ if nav == "How it works":
 - **Router** — Gemini 1.5 Flash with a Groq LLaMA 3.3 70B fallback.
 - **No keyword bias** — every item is classified without pre-filtering on the word "wishlist", so the sample is not selected on the outcome being measured.
 - **Taxonomy disentanglement** — **save motive** (why it was added) is decoupled from **current blocker** (what prevents purchase now). The two are frequently different, and conflating them is what makes most wishlist analysis misleading.
-- **Key folding** — the model sometimes returns the short alias for a bucket (`price` instead of `price_waiting`). Aliases are folded into their canonical bucket on load, so one blocker never appears as two rows with the same name. Anything outside the taxonomy is counted under **Other / unspecified** — shown, never dropped, and broken out in full on the Overview tab.
+- **Key folding** — the model sometimes returns the short alias for a bucket (`price` instead of `price_waiting`). Aliases are folded into their canonical bucket on load, so one blocker never appears as two rows with the same name.
+
+##### 2b · Catch-all audit
+Every signal that landed in **Other / unspecified** was re-examined against the 11 buckets, with the classifier explicitly told not to stretch a fit:
+- **47 were re-filed** into a bucket that genuinely applied (26 high confidence, 21 medium, 0 low). Each carries `rebucketed_from`, `rebucket_confidence` and `rebucket_reason` so the change is auditable.
+- **68 were removed from the corpus** as praise (31), creator requests (17), viewer chatter (15), spam (2), service complaints (2) and empty text (1). Each carries `dropped_category` and `dropped_reason`.
+- **114 remain** — real shopping problems the taxonomy has no name for. That is what `other` now means.
+
+The blocker catch-all fell from 23.1% to 14.2% and the relevant corpus from 749 to 681. The full list of what remains is in `reports/other-genuine-issues.pdf`.
 
 ##### 3 · Opportunity scoring
 """

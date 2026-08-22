@@ -47,7 +47,7 @@ load_dotenv()
 # Model identifiers. Run --list-models and correct these if needed.
 # ---------------------------------------------------------------
 GEMINI_MODEL = "gemini-2.5-flash"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"
 
 # Gemini free tier is request-per-minute limited. 7s between calls
 # keeps us under ~10 RPM with margin.
