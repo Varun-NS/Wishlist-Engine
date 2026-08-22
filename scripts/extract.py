@@ -139,8 +139,20 @@ def process_batch(router, system_prompt, batch):
         f"[{i + 1}] {r['text'][:1200]}" for i, r in enumerate(batch)
     )
 
-    raw, provider = router.complete(system_prompt, numbered, max_tokens=8000)
-    results = parse_json_response(raw)
+    # Retry unparseable JSON before giving up: a single bad response used to
+    # drop all BATCH_SIZE rows silently, which is a quiet way to lose data.
+    last_err = None
+    for attempt in range(3):
+        try:
+            raw, provider = router.complete(system_prompt, numbered, max_tokens=8000)
+            results = parse_json_response(raw)
+            break
+        except json.JSONDecodeError as err:
+            last_err = err
+            print(f"    (unparseable JSON, retry {attempt + 1}/3)")
+            time.sleep(3)
+    else:
+        raise last_err
 
     out = []
     for i, row in enumerate(batch):
