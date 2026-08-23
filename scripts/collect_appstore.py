@@ -50,7 +50,12 @@ APP_ID = "907394059"   # <-- VERIFY THIS against the live App Store URL
 # Storefronts to pull from. "in" is your primary market; the rest are
 # diaspora markets where the app sees real usage.
 # Drop any that return nothing - not every app is listed everywhere.
-COUNTRIES = ["in", "us", "gb", "ae", "sg", "ca", "au", "sa"]
+# Apple caps the RSS feed at 500 reviews per storefront, so the only way to
+# raise the ceiling is more storefronts. These are markets with meaningful
+# Indian diaspora or Myntra availability.
+COUNTRIES = ["in", "us", "gb", "ae", "sg", "ca", "au", "sa",
+             "my", "nz", "ie", "za", "qa", "kw", "bh", "om",
+             "hk", "np", "lk", "bd", "th", "id", "ph", "de"]
 
 # Apple allows both. Running both nets extra unique reviews.
 SORT_ORDERS = ["mostrecent", "mosthelpful"]

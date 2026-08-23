@@ -1,13 +1,15 @@
 # 🛍️ Wishlist Discovery Engine — E-Commerce Customer Intelligence
 
-An enterprise-grade AI research engine that ingests, categorizes, and quantifies **10,180+ real-world customer signals** across Google Play, Apple App Store, and YouTube to uncover what prevents wishlisted fashion products from converting to purchases on Myntra.
+An enterprise-grade AI research engine that ingests, categorizes, and quantifies **15,661 real-world customer signals** across Google Play, Apple App Store, and YouTube to uncover what prevents wishlisted fashion products from converting to purchases on Myntra.
 
 ---
 
 ## 🎯 Key Strategic Insights at a Glance
 
-* **10,180 Customer Signals Analyzed:** 5,846 Google Play Store reviews, 3,643 iOS App Store reviews (across 8 international storefronts), and 692 YouTube try-on haul comments.
-* **100% Addressable Opportunities:** Sizing uncertainty (13.9%) and Fabric/Quality doubts (23.2%) are fully addressable through UX/product interventions without requiring price discounting.
+* **15,661 Customer Signals Analyzed:** 7,449 Google Play reviews, 4,451 iOS App Store reviews (across 23 international storefronts), and 3,761 YouTube try-on haul comments — of which **1,505 carry a genuine wishlist signal**.
+* **YouTube is 24% of the corpus but 69% of the signal.** App-store reviews are about the *app*; only 3.8–4.2% describe a purchase blocker. Try-on haul comments run at **27.6%**, because that is where people actually talk through fit and quality before buying.
+* **Fit and quality lead, not price.** On app-store data alone the top blocker was "waiting for a discount". With try-on comments in, fit (25.3%) and quality/authenticity (24.3%) both overtake price (22.5%) — reordering the finding from one you can only solve with margin to two you can solve with product.
+* **68% Addressable Without Discounting:** 1,023 of the 1,505 signals are solvable through UX and product interventions; a further 23% are waiting on a price drop, which no product change fixes.
 * **Cross-Channel Behavior:** iOS users demonstrate higher sensitivity to product authenticity and styling curation compared to Android users.
 * **Hybrid Intelligence Architecture:** Offline batch LLM schema extraction paired with an **In-Memory RAG Copilot** for instant qualitative and quantitative strategy synthesis.
 
@@ -101,19 +103,22 @@ Open **`http://localhost:8501`** in your browser.
 ## 🧠 Research & Extraction Pipeline
 
 ```
-Collect (10,180 items) ➔ Extract (LLM Router) ➔ Decouple Taxonomy ➔ Quantify & Rank ➔ Interactive Copilot
+Collect (15,661 items) ➔ Extract (LLM Router) ➔ Decouple Taxonomy ➔ Quantify & Rank ➔ Interactive Copilot
 ```
 
 ### Step 1: Multi-Channel Data Harvesting
 ```bash
-python scripts/collect_playstore.py   # Scrapes 5,800+ long-form Google Play reviews
-python scripts/collect_appstore.py    # Scrapes 3,600+ iOS reviews across 8 country storefronts
-python scripts/collect_youtube.py     # Scrapes 690+ comments on Myntra try-on hauls & reviews
+python scripts/collect_playstore.py   # Scrapes 7,400+ long-form Google Play reviews
+python scripts/collect_appstore.py    # Scrapes 4,400+ iOS reviews across 23 country storefronts
+python scripts/collect_youtube.py     # Scrapes 3,700+ comments on Myntra try-on hauls & reviews
+python scripts/prepare_new.py         # Dedups a fresh pull by id AND by normalised text
+python scripts/classify_new.py --shard 0 --of 4   # Classifies only the new rows (shardable)
+python scripts/report_pdf.py          # Renders every signal by bucket to a PDF for review
 python scripts/collect_manual.py      # Structured template for Reddit/forum qualitative inputs
 ```
 
 ### Step 2: AI Structured Batch Extraction
-Processes raw text with an automatic **Gemini 2.5 Flash ➔ Groq LLaMA 3.3 70B fallback router**:
+Processes raw text with an automatic **Gemini 3.5 Flash-Lite ➔ Groq `gpt-oss-120b` fallback router**. The lite model was chosen on measured accuracy, not cost: the reasoning models spent thousands of thinking tokens per batch and still missed short, blunt, emoji-heavy complaints.
 ```bash
 python scripts/extract.py
 ```
@@ -148,7 +153,7 @@ Wishlist-Engine/
 ├── .streamlit/
 │   └── config.toml             # Myntra brand light palette configuration
 ├── data/
-│   ├── extracted.csv           # 10,180 structured customer signals (committed)
+│   ├── extracted.csv           # 15,661 structured customer signals (committed)
 │   └── raw_*.csv               # Scraped source files (gitignored)
 └── scripts/
     ├── taxonomy.py             # Taxonomy definitions, aliases & addressability rules

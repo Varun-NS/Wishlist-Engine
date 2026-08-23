@@ -875,6 +875,9 @@ CANONICAL_KEYS = {
     "quality": "quality_authenticity_doubt",
     "fit": "fit_size_uncertainty",
     "availability": "out_of_stock",
+    # The extractor occasionally emits a delivery key. Delivery is not one of the
+    # eleven buckets, so it folds into the residual rather than becoming a 12th row.
+    "delivery_returns": "other",
     "styling": "styling_uncertainty",
     "uncertainty": "other",
     "uncertainty_type": "other",
@@ -1293,11 +1296,22 @@ if nav == "Overview":
 
     with panel("headline", "The headline", "The single most important finding for this segment.", "spark"):
         st.markdown(
-            f'<p class="lede">The leading reason shoppers save is <b>{html.escape(top_motive_label.lower())}</b>. '
-            f"The purchase then stalls on <b>{html.escape(top_blocker_label.lower())}</b> — the largest named "
-            f"blocker at <b>{top_blocker_share:.0f}%</b>, with the top two together holding back "
-            f"<b>{top2_share:.0f}%</b> of stalled purchases.</p>"
-            f'<p class="lede-note"><b style="color:{INK};">{no_discount_share:.0f}%</b> '
+            # Motive and blocker share one vocabulary, so the top of both can be the
+            # same bucket. Saying it twice reads like a bug; naming the overlap is
+            # the actual finding, because it means the doubt was never resolved.
+            (
+                f'<p class="lede">Shoppers most often save because they are '
+                f'<b>{html.escape(top_motive_label.lower())}</b> — and that is still what '
+                f"stalls the purchase: the same doubt is the largest named blocker at "
+                f"<b>{top_blocker_share:.0f}%</b>, with the top two together holding back "
+                f"<b>{top2_share:.0f}%</b> of stalled purchases.</p>"
+                if top_motive_label == top_blocker_label else
+                f'<p class="lede">The leading reason shoppers save is <b>{html.escape(top_motive_label.lower())}</b>. '
+                f"The purchase then stalls on <b>{html.escape(top_blocker_label.lower())}</b> — the largest named "
+                f"blocker at <b>{top_blocker_share:.0f}%</b>, with the top two together holding back "
+                f"<b>{top2_share:.0f}%</b> of stalled purchases.</p>"
+            )
+            + f'<p class="lede-note"><b style="color:{INK};">{no_discount_share:.0f}%</b> '
             f"({no_discount_n:,} of {BASE_N:,}) are addressable by product and UX changes alone. "
             f"Another {top_price_share:.0f}% are waiting for a price drop, which no product change fixes "
             f"without discounting. The remaining {unresolved_share:.0f}% hit the taxonomy's catch-all or "
@@ -1426,12 +1440,14 @@ if nav == "Overview":
                     f'text-transform:uppercase;color:{MUTED};margin-bottom:.5rem;">In {name}</div>{lines}',
                     unsafe_allow_html=True,
                 )
-        st.caption(
-            "This bucket has been audited. Every signal in it was re-examined against the 11 buckets: "
+        audited = (
+            "Every signal in it was re-examined against the 11 buckets: "
             f"{REBUCKETED_N} were re-filed into a bucket that did fit, and {DROPPED_N} were removed from "
-            "the corpus entirely as praise, app bugs, creator requests or viewer chatter. What is left is "
-            "a genuine shopping problem with no bucket for it. `none` is an explicit “no blocker stated”. "
-            "Neither ever leads a ranking."
+            "the corpus entirely as praise, app bugs, creator requests or viewer chatter. "
+        ) if (REBUCKETED_N or DROPPED_N) else ""
+        st.caption(
+            f"{audited}What lands here is a genuine shopping problem with no bucket for it. "
+            "`none` is an explicit “no blocker stated”. Neither ever leads a ranking."
         )
 
     with panel(
@@ -2173,22 +2189,30 @@ if nav == "How it works":
             """
 ##### 1 · Multi-channel data harvesting
 - **Google Play** — long-form reviews via `google-play-scraper`; reviews under 25 characters are dropped.
-- **Apple App Store** — India, US, UK and UAE storefronts, to capture premium fashion demographics.
+- **Apple App Store** — 23 storefronts, to reach the diaspora and premium fashion demographics Apple's India feed alone misses. Apple's RSS feed is a rolling window, so archived pulls are kept and merged rather than replaced.
 - **YouTube** — comments on unboxing, try-on haul and comparison videos via the YouTube Data API.
 
 ##### 2 · AI structured extraction
-- **Router** — Gemini 1.5 Flash with a Groq LLaMA 3.3 70B fallback.
+- **Router** — Gemini `3.5-flash-lite`, with Groq `gpt-oss-120b` as fallback. The lighter Gemini model was chosen on measured accuracy, not just cost: the reasoning models spent thousands of thinking tokens on a classification task and still missed short, blunt, emoji-heavy complaints that the lite model caught.
 - **No keyword bias** — every item is classified without pre-filtering on the word "wishlist", so the sample is not selected on the outcome being measured.
 - **Taxonomy disentanglement** — **save motive** (why it was added) is decoupled from **current blocker** (what prevents purchase now). The two are frequently different, and conflating them is what makes most wishlist analysis misleading.
 - **Key folding** — the model sometimes returns the short alias for a bucket (`price` instead of `price_waiting`). Aliases are folded into their canonical bucket on load, so one blocker never appears as two rows with the same name.
 
-##### 2b · Catch-all audit
-Every signal that landed in **Other / unspecified** was re-examined against the 11 buckets, with the classifier explicitly told not to stretch a fit:
-- **47 were re-filed** into a bucket that genuinely applied (26 high confidence, 21 medium, 0 low). Each carries `rebucketed_from`, `rebucket_confidence` and `rebucket_reason` so the change is auditable.
-- **68 were removed from the corpus** as praise (31), creator requests (17), viewer chatter (15), spam (2), service complaints (2) and empty text (1). Each carries `dropped_category` and `dropped_reason`.
-- **114 remain** — real shopping problems the taxonomy has no name for. That is what `other` now means.
+##### 2b · Corpus rebuild
+The whole corpus was re-collected and re-classified end to end, because the first
+pass had four failure modes that silently dropped rows: an unparseable-JSON batch
+was skipped rather than retried, the fallback provider's model id had been retired
+and 404'd, a hardcoded field list wrote columns out of alignment against a changed
+header, and an 8,000-token response cap truncated long batches. All four are fixed
+and the run is resumable per shard.
 
-The blocker catch-all fell from 23.1% to 14.2% and the relevant corpus from 749 to 681. The full list of what remains is in `reports/other-genuine-issues.pdf`.
+- **Model** — every row was classified by a single model on a single prompt, so no
+  part of the corpus is judged more or less strictly than another.
+- **Deduplication on two axes** — by stable id, and by normalised text (case,
+  whitespace, punctuation and emoji stripped). Apple issues a different review id
+  per storefront, so the same reviewer can otherwise appear several times.
+- **Nothing is dropped for being inconvenient.** Signals that fit no bucket stay in
+  `other`, and that share is shown rather than hidden.
 
 ##### 3 · Opportunity scoring
 """

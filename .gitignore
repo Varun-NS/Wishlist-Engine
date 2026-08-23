@@ -10,3 +10,11 @@ data/raw_*.csv
 data/archive/
 # intermediate report HTML; the PDF is the deliverable
 reports/*.html
+
+# Working copies and per-shard intermediates of the classification pipeline.
+# data/extracted.csv is the committed corpus; these rebuild it.
+data/extracted_clean.csv
+data/extracted_v*.csv
+data/new_classified/
+data/reclassified/
+data/raw_new.csv

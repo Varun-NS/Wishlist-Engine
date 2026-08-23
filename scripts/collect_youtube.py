@@ -54,9 +54,24 @@ SEARCH_TERMS = [
     "online shopping fail india size",
     "myntra quality review honest",
     "indian ethnic wear online shopping tips",
+    # widened: more hauls, more size/fit talk, more comparison and regret
+    "myntra haul 2026",
+    "myntra western wear haul",
+    "myntra shoes haul review",
+    "myntra saree haul review",
+    "ajio haul honest review",
+    "myntra return experience",
+    "myntra product quality bad",
+    "online shopping size problem india",
+    "which size should i order online",
+    "myntra vs amazon fashion",
+    "myntra wishlist tips",
+    "myntra sale haul what to buy",
+    "flipkart vs myntra clothes quality",
+    "myntra first copy fake product",
 ]
 
-VIDEOS_PER_TERM = 30
+VIDEOS_PER_TERM = 12
 COMMENTS_PER_VIDEO = 100   # max the API allows per page
 
 OUTPUT_PATH = os.path.join("data", "raw_youtube.csv")
@@ -149,7 +164,7 @@ def main():
             comments = get_comments(vid, title)
             all_rows.extend(comments)
             print(f"  {title[:55]:<55} +{len(comments)}")
-            time.sleep(0.3)
+            time.sleep(0.05)
 
     os.makedirs("data", exist_ok=True)
     with open(OUTPUT_PATH, "w", newline="", encoding="utf-8") as f:
