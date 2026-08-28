@@ -895,8 +895,25 @@ CANONICAL_KEYS = {
 }
 
 
+def dataset_signature(path=DATA_PATH):
+    """(mtime, size) of the corpus, used as part of the cache key.
+
+    st.cache_data keys on the function source plus its arguments. load_data's
+    source rarely changes, so a deploy that ships a new corpus under the same
+    filename would otherwise keep serving the previously cached DataFrame - the
+    row counts still look right, and only newly added columns go missing, which
+    is close to the worst way for this to fail. Passing the file's own
+    fingerprint in makes new data invalidate the cache.
+    """
+    try:
+        st_ = os.stat(path)
+        return int(st_.st_mtime), st_.st_size
+    except OSError:
+        return (0, 0)
+
+
 @st.cache_data
-def load_data(path=DATA_PATH):
+def load_data(path=DATA_PATH, signature=None):
     if not os.path.exists(path):
         return None
     df = pd.read_csv(path)
@@ -1111,7 +1128,7 @@ MIN_TAGGED = 25
 
 
 @st.cache_data
-def scope_weights(_corpus_id=None):
+def scope_weights(signature=None):
     """Per-bucket (blocks-whole-wishlist, resolves-in-30-days), source-controlled."""
     base = rel[rel["source"].astype(str).str.lower() == SCOPE_SOURCE]
     out = {}
@@ -1144,7 +1161,7 @@ def metric_leverage(df, substitution=0.5):
     if rel_df.empty:
         return pd.DataFrame()
     total = len(rel_df)
-    weights = scope_weights()
+    weights = scope_weights(dataset_signature(ACTIVE_PATH))
 
     rows = []
     for key in BUCKETS:
@@ -1247,7 +1264,7 @@ def score_opportunities(df):
 # Load dataset
 # ------------------------------------------------------------------
 ACTIVE_PATH, DATA_LABEL, DATA_NOTE = resolve_dataset()
-df = load_data(ACTIVE_PATH)
+df = load_data(ACTIVE_PATH, dataset_signature(ACTIVE_PATH))
 
 if df is None:
     st.error("No dataset found at `data/extracted.csv`. Run the extraction pipeline first.")
