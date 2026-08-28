@@ -18,3 +18,4 @@ data/extracted_v*.csv
 data/new_classified/
 data/reclassified/
 data/raw_new.csv
+data/scope_tags/

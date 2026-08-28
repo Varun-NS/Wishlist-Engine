@@ -4,6 +4,24 @@ An enterprise-grade AI research engine that ingests, categorizes, and quantifies
 
 ---
 
+## 🎯 The business metric
+
+> **Increase the percentage of users who purchase at least one item from their wishlist within 30 days of adding it.**
+
+Everything in the app is ranked against that sentence, not against complaint volume. Three properties of it change the answer:
+
+| Property | Why it changes the ranking |
+| :--- | :--- |
+| **Users**, not items | One shopper complaining ten times is still one user. |
+| **At least one** | A doubt about one product is survivable — the shopper buys something else in the list. A doubt about *Myntra itself* blocks every saved item at once. |
+| **Within 30 days** | "Waiting for the Diwali sale" is a real purchase that lands outside the window. Solving it does not move this metric. |
+
+So the score is `share × severity × user-cost × in-window`, where the last two terms are measured per signal by `scripts/scope_tag.py` rather than assumed. That reordering is not cosmetic: **quality/authenticity doubts are 78% wishlist-wide against fit's 48%**, so quality costs more users per complaint even though fit appears more often.
+
+The two scope terms are estimated on **YouTube comments only**. An app reviewer writes "always out of stock" where a shopper looking at one garment writes "sold out in M" — pooling them put `out_of_stock` at 87% wishlist-wide on app reviews against 30% on YouTube. Controlling for venue changes the *level* but not the *ordering*.
+
+Buckets whose 95% confidence intervals overlap **share a rank**. At n≈1,500 the top three are not statistically separable, and the app says so instead of printing a 1, 2, 3 the data cannot support.
+
 ## 🎯 Key Strategic Insights at a Glance
 
 * **15,661 Customer Signals Analyzed:** 7,449 Google Play reviews, 4,451 iOS App Store reviews (across 23 international storefronts), and 3,761 YouTube try-on haul comments — of which **1,505 carry a genuine wishlist signal**.
@@ -113,6 +131,7 @@ python scripts/collect_appstore.py    # Scrapes 4,400+ iOS reviews across 23 cou
 python scripts/collect_youtube.py     # Scrapes 3,700+ comments on Myntra try-on hauls & reviews
 python scripts/prepare_new.py         # Dedups a fresh pull by id AND by normalised text
 python scripts/classify_new.py --shard 0 --of 4   # Classifies only the new rows (shardable)
+python scripts/scope_tag.py --shard 0 --of 4      # Tags each signal item- vs platform-scoped, and in/out of the 30-day window
 python scripts/report_pdf.py          # Renders every signal by bucket to a PDF for review
 python scripts/collect_manual.py      # Structured template for Reddit/forum qualitative inputs
 ```

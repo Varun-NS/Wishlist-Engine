@@ -29,6 +29,7 @@ Navigation (5 top-level tabs, no nested tab layer)
 """
 
 import html
+import math
 import os
 import re
 import sys
@@ -157,6 +158,16 @@ h1, h2, h3, h4, h5, h6 {
 [data-testid="stColumn"] [class*="st-key-p_"] { height: 100%; margin-bottom: 0; }
 
 /* Panel header: icon chip + title + one line saying what the section is */
+.metric-callout {
+  background: linear-gradient(90deg, rgba(255,63,108,.09), rgba(255,63,108,.02));
+  border-left: 3px solid var(--brand); border-radius: 10px;
+  padding: .7rem 1rem; margin: 0 0 1.1rem;
+  font-size: .95rem; line-height: 1.55; color: var(--ink);
+}
+.metric-callout span {
+  display: block; font-size: .72rem; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--brand-ink); margin-bottom: .18rem;
+}
 .panel-head {
     display: flex; align-items: flex-start; gap: .8rem;
     padding-bottom: 1.05rem; margin-bottom: 1.15rem;
@@ -1034,6 +1045,163 @@ COVERAGE_GAP = {
 }
 
 
+# ------------------------------------------------------------------
+# The business metric
+# ------------------------------------------------------------------
+BUSINESS_METRIC = (
+    "Increase the percentage of users who purchase at least one item from "
+    "their wishlist within 30 days of adding it."
+)
+
+# Three properties of that metric decide how much a blocker actually costs, and
+# none of them is "how often does it appear":
+#
+#   users, not items   - the denominator is people. A blocker that annoys one
+#                        shopper ten times still only costs one user.
+#   at least ONE       - a shopper with eight saved items needs a single one to
+#                        convert. A blocker on one product is survivable; a doubt
+#                        about Myntra itself blocks all eight at once.
+#   within 30 days     - "waiting for the Diwali sale" is a real purchase that
+#                        lands outside the window. Solving it does not move this
+#                        metric, and pretending otherwise inflates the case.
+#
+# `blocker_scope` and `resolves_in_30d` are LLM-assigned per signal by
+# scripts/scope_tag.py, so the two adjustments below are measured on this corpus
+# rather than assumed.
+
+
+def wilson_ci(k, n, z=1.96):
+    """95% CI for a proportion. Small buckets need the interval, not the point."""
+    if not n:
+        return 0.0, 0.0
+    p = k / n
+    d = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return max(0.0, (centre - half)) * 100, min(1.0, (centre + half)) * 100
+
+
+def _tagged_fraction(frame, column, *values):
+    """Share of rows carrying one of `values`, over rows actually tagged.
+
+    Untagged rows leave the denominator rather than counting as a "no", so a
+    partial tagging run understates nothing.
+    """
+    if column not in frame.columns:
+        return None, 0
+    col = frame[column].astype(str).str.strip().str.lower()
+    col = col[col.isin({"item", "platform", "yes", "no", "unclear"})]
+    if col.empty:
+        return None, 0
+    return col.isin(values).mean(), len(col)
+
+
+# Where a complaint was written changes how it is phrased, independently of the
+# blocker behind it. An app reviewer writes "always out of stock"; a YouTube
+# commenter looking at one garment writes "sold out in M". Pooling the two puts
+# out_of_stock at 87% wishlist-wide on app reviews against 30% on YouTube - a
+# 57pp swing driven by venue, not by the blocker.
+#
+# So the weights are estimated on YouTube alone: comments on try-on hauls are the
+# closest thing in this corpus to a shopper deliberating over a saved item. The
+# ordering is unchanged by the control (quality stays far more wishlist-wide than
+# fit), only the level is - which is exactly what a venue artifact looks like.
+SCOPE_SOURCE = "youtube"
+MIN_TAGGED = 25
+
+
+@st.cache_data
+def scope_weights(_corpus_id=None):
+    """Per-bucket (blocks-whole-wishlist, resolves-in-30-days), source-controlled."""
+    base = rel[rel["source"].astype(str).str.lower() == SCOPE_SOURCE]
+    out = {}
+    for key in BUCKETS:
+        sub = base[base["current_blocker"] == key]
+        plat, n_p = _tagged_fraction(sub, "blocker_scope", "platform")
+        in30, n_i = _tagged_fraction(sub, "resolves_in_30d", "yes")
+        # Too thin to estimate from is left unestimated rather than guessed.
+        out[key] = (
+            plat if (plat is not None and n_p >= MIN_TAGGED) else None,
+            in30 if (in30 is not None and n_i >= MIN_TAGGED) else None,
+            min(n_p, n_i),
+        )
+    return out
+
+
+def metric_leverage(df, substitution=0.5):
+    """Rank buckets by how much fixing them could move the business metric.
+
+        leverage = share x severity x user-cost x in-window
+
+    `user-cost` is where this parts company with raw frequency. A doubt about
+    Myntra itself costs the whole user - every saved item is tainted at once. An
+    item-scoped doubt only costs them if they do not simply buy something else
+    from the same wishlist, which is what `substitution` estimates. At
+    substitution=0 the two are treated alike and this collapses back to
+    frequency x severity.
+    """
+    rel_df = df[df["relevant"]] if "relevant" in df.columns else df
+    if rel_df.empty:
+        return pd.DataFrame()
+    total = len(rel_df)
+    weights = scope_weights()
+
+    rows = []
+    for key in BUCKETS:
+        if key == "other":
+            continue
+        subset = rel_df[rel_df["current_blocker"] == key]
+        if subset.empty:
+            continue
+
+        count = len(subset)
+        pct = count / total * 100
+        lo, hi = wilson_ci(count, total)
+        avg_sev = subset["severity"].map(SEVERITY_WEIGHT).dropna().mean()
+        avg_sev = float(avg_sev) if pd.notna(avg_sev) else 1.0
+
+        plat, in30, n_tagged = weights.get(key, (None, None, 0))
+        # An unestimated bucket takes the conservative reading, never the
+        # flattering one: item-scoped, and fully inside the window.
+        plat_v = 0.0 if plat is None else plat
+        in30_v = 1.0 if in30 is None else in30
+
+        user_cost = plat_v + (1 - plat_v) * (1 - substitution)
+        leverage = pct * avg_sev * user_cost * in30_v * (1 if is_addressable(key) else 0)
+
+        rows.append({
+            "Opportunity": bucket_label(key),
+            "_key": key,
+            "Share": pct,
+            "_lo": lo,
+            "_hi": hi,
+            "Signals": count,
+            "Avg severity": round(avg_sev, 2),
+            "Blocks whole wishlist": float("nan") if plat is None else plat * 100,
+            "Resolves in 30d": float("nan") if in30 is None else in30 * 100,
+            "Leverage": round(leverage, 1),
+            "_estimated": n_tagged >= MIN_TAGGED,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows).sort_values("Leverage", ascending=False).reset_index(drop=True)
+
+    # Buckets whose confidence intervals overlap are tied, not ranked. Printing
+    # 1, 2, 3 down a list the data cannot separate is the easiest way to mislead
+    # a reader who is skimming.
+    ranks, rank, prev_lo = [], 0, None
+    for _, r in out.iterrows():
+        if prev_lo is None or r["_hi"] < prev_lo:
+            rank += 1
+            prev_lo = r["_lo"]
+        else:
+            prev_lo = min(prev_lo, r["_lo"])
+        ranks.append(rank)
+    out["Rank"] = ranks
+    return out
+
+
 def score_opportunities(df):
     rel_df = df[df["relevant"]] if "relevant" in df.columns else df
     if rel_df.empty:
@@ -1452,34 +1620,158 @@ if nav == "Overview":
 
     with panel(
         "matrix",
-        "Ranked opportunity matrix",
-        "Share of blockers × average severity × coverage gap. Highest score = highest-ROI fix.",
+        "What moves the metric",
+        "Ranked by effect on wishlist-to-purchase conversion, not by how often people complain.",
         "trend",
     ):
-        opp_df = score_opportunities(view)
-        if not opp_df.empty:
+        st.markdown(
+            f'<div class="metric-callout"><span>The metric</span>{html.escape(BUSINESS_METRIC)}</div>',
+            unsafe_allow_html=True,
+        )
+        sub_pct = st.slider(
+            "If one saved item is blocked, how often does the shopper just buy a different one instead?",
+            0, 100, 50, 5, format="%d%%", key="substitution",
+            help="At 0% every blocked item costs you the user. At 100% only doubts about Myntra "
+                 "itself can cost you the user, because anything item-specific is substituted away.",
+        )
+        opp_df = metric_leverage(view, substitution=sub_pct / 100)
+
+        if opp_df.empty:
+            st.info("No opportunity data for this slice. Widen the filters to see the ranking.")
+        else:
+            # Streamlit renders a NaN in a NumberColumn as the literal "None".
+            # An unestimated cell should read as absent, so these two are
+            # formatted to text with an em dash for "too few signals to say".
+            show = opp_df[["Rank", "Opportunity", "Share", "Signals", "Avg severity",
+                           "Blocks whole wishlist", "Resolves in 30d", "Leverage"]].copy()
+            for col in ("Blocks whole wishlist", "Resolves in 30d"):
+                show[col] = show[col].map(lambda v: "—" if pd.isna(v) else f"{v:.0f}%")
             st.dataframe(
-                opp_df,
-                width="stretch",
-                hide_index=True,
+                show, width="stretch", hide_index=True,
                 column_config={
-                    "Opportunity": st.column_config.TextColumn("Opportunity", width="large"),
-                    "Share": st.column_config.NumberColumn("Share of blockers", format="%.1f%%"),
+                    "Rank": st.column_config.NumberColumn(
+                        "Rank", help="Buckets whose 95% confidence intervals overlap share a rank.",
+                        format="%d", width="small"),
+                    "Opportunity": st.column_config.TextColumn("Opportunity", width="medium"),
+                    "Share": st.column_config.NumberColumn("Share", format="%.1f%%"),
                     "Signals": st.column_config.NumberColumn("Signals", format="%d"),
                     "Avg severity": st.column_config.NumberColumn(
-                        "Avg severity", help="1 = low, 3 = high", format="%.2f"
-                    ),
-                    "Score": st.column_config.ProgressColumn(
-                        "Opportunity score",
-                        help="Composite of frequency, user pain and competitive white space",
-                        format="%.1f",
-                        min_value=0,
-                        max_value=max(1.0, float(opp_df["Score"].max())),
-                    ),
+                        "Severity", help="1 = low, 3 = high", format="%.2f"),
+                    "Blocks whole wishlist": st.column_config.TextColumn(
+                        "Whole wishlist",
+                        help="Share of these signals that are a doubt about Myntra itself rather than "
+                             "one product, so every saved item is blocked at once. Estimated on YouTube "
+                             "comments only, to control for app reviewers phrasing everything as a "
+                             "platform complaint. An em dash means too few tagged signals to estimate."),
+                    "Resolves in 30d": st.column_config.TextColumn(
+                        "In 30 days",
+                        help="Share the shopper could plausibly complete inside the measurement window. "
+                             "A purchase waiting on a festival sale is real revenue that lands outside it."),
+                    "Leverage": st.column_config.ProgressColumn(
+                        "Leverage",
+                        help="share x severity x user-cost x in-window",
+                        format="%.1f", min_value=0,
+                        max_value=max(1.0, float(opp_df["Leverage"].max()))),
                 },
             )
+            tied = opp_df.groupby("Rank").size()
+            tied = [r for r, n in tied.items() if n > 1]
+            if tied:
+                names = opp_df[opp_df["Rank"] == tied[0]]["Opportunity"].tolist()
+                joined = (" and ".join(names) if len(names) < 3
+                          else ", ".join(names[:-1]) + " and " + names[-1])
+                st.caption(
+                    f"**{joined}** all share rank {tied[0]}: their 95% confidence intervals "
+                    f"overlap at n={len(view):,}, so this corpus cannot separate them. Treat "
+                    "them as one priority, not a first, second and third."
+                )
+
+    with panel(
+        "sizing",
+        "What it is worth",
+        "Turn the ranking into a range of users, using your funnel numbers.",
+        "sliders",
+    ):
+        st.caption(
+            "This corpus measures stated friction, not conversion — it cannot observe how many "
+            "wishlists convert. Supply the funnel numbers it is missing and the shares above become "
+            "a size. Everything below is a scenario built on your inputs, not a measurement."
+        )
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            users = st.number_input(
+                "Users adding to a wishlist per month", min_value=1000, value=1_000_000,
+                step=50_000, format="%d", key="mau")
+            intent = st.slider(
+                "Of those who do not buy, how many actually wanted to?", 5, 100, 40, 5,
+                format="%d%%", key="intent",
+                help="The rest are browsing, saving for later or window shopping. No product fix "
+                     "converts them, and counting them is what turns a sizing model into a fantasy.")
+        with c2:
+            baseline = st.number_input(
+                "…who buy at least one saved item within 30 days (%)", min_value=0.1,
+                max_value=99.0, value=20.0, step=0.5, key="baseline")
+            efficacy = st.slider(
+                "Of those blocked, how many does the fix actually convert?", 1, 100, 25, 1,
+                format="%d%%", key="efficacy",
+                help="The honest unknown. A size guide does not convert everyone who was unsure. "
+                     "Anything above ~40% should be treated as optimistic until an A/B test says otherwise.")
+
+        opp_sized = metric_leverage(view, substitution=st.session_state.get("substitution", 50) / 100)
+        if opp_sized.empty:
+            st.info("No opportunity data for this slice.")
         else:
-            st.info("No opportunity data for this slice. Widen the filters to see the ranking.")
+            # The addressable pool is not everyone who failed to convert. It is the
+            # ones who meant to buy and were stopped - which is why `intent` exists.
+            blocked = users * (1 - baseline / 100) * (intent / 100)
+            lev_total = opp_sized["Leverage"].sum()
+            if lev_total > 0:
+                sized = opp_sized.head(5).copy()
+                sized["held"] = blocked * sized["Leverage"] / lev_total
+                sized["won"] = sized["held"] * efficacy / 100
+                sized["lift"] = sized["won"] / users * 100
+                disp = pd.DataFrame({
+                    "Opportunity": sized["Opportunity"],
+                    "Users held back / month": sized["held"].map(lambda v: f"{v:,.0f}"),
+                    "Recovered / month": sized["won"].map(lambda v: f"{v:,.0f}"),
+                    "Metric lift": sized["lift"].map(lambda v: f"+{v:.2f} pp"),
+                })
+                st.dataframe(
+                    disp, width="stretch", hide_index=True,
+                    column_config={
+                        "Opportunity": st.column_config.TextColumn("Opportunity", width="medium"),
+                        "Users held back / month": st.column_config.TextColumn(
+                            "Held back / month",
+                            help="The blocked pool, split by each bucket's share of total leverage."),
+                        "Recovered / month": st.column_config.TextColumn("Recovered / month"),
+                        "Metric lift": st.column_config.TextColumn(
+                            "Metric lift", help="Percentage points added to the business metric."),
+                    },
+                )
+                total_lift = float(sized["lift"].sum())
+                st.markdown(
+                    f'<div class="metric-callout"><span>Modelled outcome</span>'
+                    f"Fixing the top five moves the metric <b>+{total_lift:.2f} pp</b> — "
+                    f"{baseline:.1f}% → <b>{baseline + total_lift:.2f}%</b>, "
+                    f"<b>{sized['won'].sum():,.0f}</b> more converting users a month.</div>",
+                    unsafe_allow_html=True,
+                )
+                # A model that promises to move a conversion metric by half its own
+                # baseline is describing its inputs, not the business.
+                if total_lift > baseline * 0.25:
+                    st.warning(
+                        f"That is a **{total_lift / baseline * 100:.0f}% relative lift** on the baseline. Conversion "
+                        "uplifts above ~25% relative almost never survive contact with an A/B test. "
+                        "Lower the intent or efficacy assumption before taking this anywhere."
+                    )
+                st.caption(
+                    "Two assumptions carry this. **One:** blockers are distributed among "
+                    "non-converting wishlist users the way they are distributed in this corpus of "
+                    "reviewers and commenters — untested, and the largest source of error here. "
+                    "**Two:** the leverage split above is a reasonable proxy for how blocked users "
+                    "divide. Validate the first against real wishlist telemetry before anyone "
+                    "commits a roadmap to these numbers."
+                )
 
     with panel(
         "platforms",
@@ -1719,9 +2011,10 @@ if nav == "Deep dives":
             )
             st.caption(
                 f"Every share above is computed live from the corpus, over all {N:,} relevant signals. "
-                "Ranking follows signal volume and severity. Expected-impact estimates are deliberately "
-                "omitted: this corpus measures stated friction, not conversion, so it cannot support a "
-                "conversion-lift number."
+                "This table ranks by raw signal volume and severity. That is not the same as ranking "
+                "by effect on the business metric — for that, see **what moves the metric** on the "
+                "Overview, which additionally weights each blocker by whether it blocks the whole "
+                "wishlist or just one item, and by whether it resolves inside the 30-day window."
             )
 
 
@@ -2213,6 +2506,16 @@ and the run is resumable per shard.
   per storefront, so the same reviewer can otherwise appear several times.
 - **Nothing is dropped for being inconvenient.** Signals that fit no bucket stay in
   `other`, and that share is shown rather than hidden.
+
+##### 2c · Scoring against the business metric
+The metric is **the percentage of users who buy at least one saved item within 30 days**. Three properties of it decide what a blocker actually costs, and raw frequency captures none of them:
+- **Users, not items.** One shopper complaining ten times is still one user.
+- **At least *one*.** A doubt about a single product is survivable — the shopper buys something else in the list. A doubt about Myntra itself blocks every saved item at once. Each signal is tagged `item` or `platform` for exactly this.
+- **Within 30 days.** "Waiting for the Diwali sale" is a real purchase that lands outside the window. Each signal is tagged for whether it can plausibly close inside it.
+
+Both tags are assigned per signal by `scripts/scope_tag.py`. They are estimated on **YouTube comments only**: an app reviewer writes "always out of stock" where a shopper looking at one garment writes "sold out in M", and pooling the two put `out_of_stock` at 87% wishlist-wide on app reviews against 30% on YouTube. The ordering is unchanged by that control — quality stays far more wishlist-wide than fit — but the level is, which is what a venue artifact looks like.
+
+Buckets whose 95% confidence intervals overlap **share a rank** rather than being printed 1, 2, 3. At n≈1,500 the top three are not separable, and presenting them as ordered would be the easiest way to mislead someone skimming.
 
 ##### 3 · Opportunity scoring
 """
