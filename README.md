@@ -38,10 +38,10 @@ Buckets whose 95% confidence intervals overlap **share a rank**. At n≈1,500 th
 ```
 Wishlist Discovery Engine
 ├── Overview          The answer in one screen: headline finding, 4 KPI tiles,
-│                     motives vs. blockers, ranked opportunity matrix,
+│                     motives vs. blockers,
 │                     platform divergence (collapsed by default)
-├── Deep dives        4 strategic pillars behind one pill selector:
-│                     intent, blockers & uncertainty, search leakage, ROI roadmap
+├── Deep dives        3 strategic pillars behind one pill selector:
+│                     intent, blockers & uncertainty, search leakage
 ├── AI copilot        Ask the corpus — in-memory retrieval, 1-click starter
 │                     questions, ground-truth citations for every answer
 ├── Voice of customer Evidence grid with blocker / severity / channel filters,

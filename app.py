@@ -1636,74 +1636,6 @@ if nav == "Overview":
         )
 
     with panel(
-        "matrix",
-        "What moves the metric",
-        "Ranked by effect on wishlist-to-purchase conversion, not by how often people complain.",
-        "trend",
-    ):
-        st.markdown(
-            f'<div class="metric-callout"><span>The metric</span>{html.escape(BUSINESS_METRIC)}</div>',
-            unsafe_allow_html=True,
-        )
-        sub_pct = st.slider(
-            "If one saved item is blocked, how often does the shopper just buy a different one instead?",
-            0, 100, 50, 5, format="%d%%", key="substitution",
-            help="At 0% every blocked item costs you the user. At 100% only doubts about Myntra "
-                 "itself can cost you the user, because anything item-specific is substituted away.",
-        )
-        opp_df = metric_leverage(view, substitution=sub_pct / 100)
-
-        if opp_df.empty:
-            st.info("No opportunity data for this slice. Widen the filters to see the ranking.")
-        else:
-            # Streamlit renders a NaN in a NumberColumn as the literal "None".
-            # An unestimated cell should read as absent, so these two are
-            # formatted to text with an em dash for "too few signals to say".
-            show = opp_df[["Rank", "Opportunity", "Share", "Signals", "Avg severity",
-                           "Blocks whole wishlist", "Resolves in 30d", "Leverage"]].copy()
-            for col in ("Blocks whole wishlist", "Resolves in 30d"):
-                show[col] = show[col].map(lambda v: "—" if pd.isna(v) else f"{v:.0f}%")
-            st.dataframe(
-                show, width="stretch", hide_index=True,
-                column_config={
-                    "Rank": st.column_config.NumberColumn(
-                        "Rank", help="Buckets whose 95% confidence intervals overlap share a rank.",
-                        format="%d", width="small"),
-                    "Opportunity": st.column_config.TextColumn("Opportunity", width="medium"),
-                    "Share": st.column_config.NumberColumn("Share", format="%.1f%%"),
-                    "Signals": st.column_config.NumberColumn("Signals", format="%d"),
-                    "Avg severity": st.column_config.NumberColumn(
-                        "Severity", help="1 = low, 3 = high", format="%.2f"),
-                    "Blocks whole wishlist": st.column_config.TextColumn(
-                        "Whole wishlist",
-                        help="Share of these signals that are a doubt about Myntra itself rather than "
-                             "one product, so every saved item is blocked at once. Estimated on YouTube "
-                             "comments only, to control for app reviewers phrasing everything as a "
-                             "platform complaint. An em dash means too few tagged signals to estimate."),
-                    "Resolves in 30d": st.column_config.TextColumn(
-                        "In 30 days",
-                        help="Share the shopper could plausibly complete inside the measurement window. "
-                             "A purchase waiting on a festival sale is real revenue that lands outside it."),
-                    "Leverage": st.column_config.ProgressColumn(
-                        "Leverage",
-                        help="share x severity x user-cost x in-window",
-                        format="%.1f", min_value=0,
-                        max_value=max(1.0, float(opp_df["Leverage"].max()))),
-                },
-            )
-            tied = opp_df.groupby("Rank").size()
-            tied = [r for r, n in tied.items() if n > 1]
-            if tied:
-                names = opp_df[opp_df["Rank"] == tied[0]]["Opportunity"].tolist()
-                joined = (" and ".join(names) if len(names) < 3
-                          else ", ".join(names[:-1]) + " and " + names[-1])
-                st.caption(
-                    f"**{joined}** all share rank {tied[0]}: their 95% confidence intervals "
-                    f"overlap at n={len(view):,}, so this corpus cannot separate them. Treat "
-                    "them as one priority, not a first, second and third."
-                )
-
-    with panel(
         "sizing",
         "What it is worth",
         "Turn the ranking into a range of users, using your funnel numbers.",
@@ -1711,16 +1643,16 @@ if nav == "Overview":
     ):
         st.caption(
             "This corpus measures stated friction, not conversion — it cannot observe how many "
-            "wishlists convert. Supply the funnel numbers it is missing and the shares above become "
+            "wishlists convert. Supply the funnel numbers it is missing and the friction shares become "
             "a size. Everything below is a scenario built on your inputs, not a measurement."
         )
         c1, c2 = st.columns(2, gap="medium")
         with c1:
             users = st.number_input(
-                "Users adding to a wishlist per month", min_value=1000, value=1_000_000,
-                step=50_000, format="%d", key="mau")
+                "Users adding to a wishlist per month", min_value=1000, value=1000,
+                step=1000, format="%d", key="mau")
             intent = st.slider(
-                "Of those who do not buy, how many actually wanted to?", 5, 100, 40, 5,
+                "Of those who do not buy, how many actually wanted to?", 5, 100, 20, 5,
                 format="%d%%", key="intent",
                 help="The rest are browsing, saving for later or window shopping. No product fix "
                      "converts them, and counting them is what turns a sizing model into a fantasy.")
@@ -1729,10 +1661,15 @@ if nav == "Overview":
                 "…who buy at least one saved item within 30 days (%)", min_value=0.1,
                 max_value=99.0, value=20.0, step=0.5, key="baseline")
             efficacy = st.slider(
-                "Of those blocked, how many does the fix actually convert?", 1, 100, 25, 1,
+                "Of those blocked, how many does the fix actually convert?", 1, 100, 15, 1,
                 format="%d%%", key="efficacy",
                 help="The honest unknown. A size guide does not convert everyone who was unsure. "
                      "Anything above ~40% should be treated as optimistic until an A/B test says otherwise.")
+
+        st.caption(
+            "Defaults are deliberately conservative. Raise them to see the ceiling — "
+            "the warning will tell you when the scenario stops being credible."
+        )
 
         opp_sized = metric_leverage(view, substitution=st.session_state.get("substitution", 50) / 100)
         if opp_sized.empty:
@@ -1824,10 +1761,10 @@ if nav == "Overview":
 if nav == "Deep dives":
     guide("Pick a pillar below. Each one is a chart plus the reading of it, on a single screen.")
 
-    with panel("pillars", "Strategic deep dives", "Four pillars answering the research brief.", "target"):
+    with panel("pillars", "Strategic deep dives", "Three pillars answering the research brief.", "target"):
         pillar = st.radio(
             "Pillar",
-            ["Intent & motives", "Blockers & uncertainty", "Search leakage", "ROI roadmap"],
+            ["Intent & motives", "Blockers & uncertainty", "Search leakage"],
             key="pillar",
             horizontal=True,
             label_visibility="collapsed",
@@ -1837,7 +1774,7 @@ if nav == "Deep dives":
     # and chart key "chart_pillar" - on purpose. Giving each pillar its own keys
     # changes the element tree's identity when the selection changes, which
     # remounts the enclosing st.tabs component and silently throws the user back
-    # to the first tab. Keep these keys identical across all four branches.
+    # to the first tab. Keep these keys identical across all three branches.
     if pillar == "Intent & motives":
         left, right = st.columns([1.15, 1], gap="medium")
         with left:
@@ -1990,49 +1927,6 @@ if nav == "Deep dives":
                     f"Only {_ch_total:,} of {len(rel):,} signals name an external channel, so these shares "
                     "are of that subset — not of the whole corpus."
                 )
-
-    else:
-        with panel(
-            "p4",
-            "Prioritised roadmap",
-            "Five interventions, ranked by the signal actually behind them.",
-            "rocket",
-        ):
-            N = len(rel)
-
-            def _sig(column, *keys):
-                n, _, p = share(rel, column, *keys, base=rel)
-                return n, p
-
-            def _high_sev(*keys):
-                sub = rel[rel["current_blocker"].isin(keys)]
-                return (sub["severity"] == "high").mean() * 100 if len(sub) else 0.0
-
-            fit_n, fit_p = _sig("current_blocker", "fit_size_uncertainty")
-            qual_n, qual_p = _sig("current_blocker", "quality_authenticity_doubt")
-            cmp_n, cmp_p = _sig("save_motive", "in_app_comparison", "cross_platform_comparison")
-            oos_n, oos_p = _sig("current_blocker", "out_of_stock")
-            price_n, price_p = _sig("current_blocker", "price_waiting")
-            sty_n, sty_p = _sig("current_blocker", "styling_uncertainty")
-
-            st.markdown(
-                f"""
-| # | Opportunity | Friction solved | Signal in this corpus | Intervention |
-| :- | :--- | :--- | :--- | :--- |
-| **1** | **Verified UGC & video hub** | `quality_authenticity_doubt` | **{qual_p:.1f}%** ({qual_n:,}) · #1 blocker · {_high_sev("quality_authenticity_doubt"):.0f}% high severity | Verified customer unboxing photos, daylight fabric zoom, customer try-on video in the wishlist drawer |
-| **2** | **Price & restock alerts** | `price_waiting`, `out_of_stock` | **{price_p:.1f}%** ({price_n:,}) price waiting · **{oos_p:.1f}%** ({oos_n:,}) stockouts | One-click WhatsApp restock alerts plus a 48-hour price lock, without discounting |
-| **3** | **Interactive fit & size matrix** | `fit_size_uncertainty` | **{fit_p:.1f}%** ({fit_n:,}) · {_high_sev("fit_size_uncertainty"):.0f}% high severity | Cross-brand fit translation (*"fits like Zara M"*), exact inch measurements, body visualiser |
-| **4** | **In-wishlist comparison tray** | `in_app_comparison`, `cross_platform_comparison` | **{cmp_p:.1f}%** ({cmp_n:,}) of save motives | Side-by-side spec tray inside the wishlist: fabric, ratings, price, returnability |
-| **5** | **'Complete the look' styler** | `styling_uncertainty` | **{sty_p:.1f}%** ({sty_n:,}) · smallest of the five | Algorithmic bundling of matching footwear and bottoms already in inventory, one-click add |
-"""
-            )
-            st.caption(
-                f"Every share above is computed live from the corpus, over all {N:,} relevant signals. "
-                "This table ranks by raw signal volume and severity. That is not the same as ranking "
-                "by effect on the business metric — for that, see **what moves the metric** on the "
-                "Overview, which additionally weights each blocker by whether it blocks the whole "
-                "wishlist or just one item, and by whether it resolves inside the 30-day window."
-            )
 
 
 # ==================================================================
