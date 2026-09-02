@@ -561,6 +561,33 @@ hr { border-color: var(--line-soft) !important; margin: 2rem 0 !important; }
 @media (prefers-contrast: more) {
     [class*="st-key-p_"], .evidence, .wa-card { background: #FFFFFF; backdrop-filter: none; }
 }
+/* ---------- LAPTOP WIDTHS ----------
+   The design is sized for ~1500 CSS px: a 1200px column beside a ~255px
+   sidebar, at a 17px root. A 13" Windows laptop at 150% display scaling gives
+   the browser about 1280 - the content column drops to ~870px while everything
+   inside stays sized for 17px, which is why zooming out to 75% "fixed" it.
+   Because the whole design is rem-based, easing the root font down across these
+   widths reproduces that zoom honestly, rather than letting panels crush. */
+@media (max-width: 1500px) {
+    html { font-size: 16px; }
+    .main .block-container { max-width: 1120px; padding-left: 1.5rem; padding-right: 1.5rem; }
+    [class*="st-key-p_"] { padding: 1.35rem 1.45rem !important; }
+    section[data-testid="stSidebar"] { width: 244px !important; min-width: 244px !important; }
+}
+@media (max-width: 1360px) {
+    html { font-size: 15px; }
+    .main .block-container { max-width: 100%; padding-left: 1.25rem; padding-right: 1.25rem; }
+    [class*="st-key-p_"] { padding: 1.15rem 1.2rem !important; border-radius: 18px; }
+    section[data-testid="stSidebar"] { width: 220px !important; min-width: 220px !important; }
+    .app-header h1 { font-size: 1.75rem; }
+}
+@media (max-width: 1180px) {
+    html { font-size: 14.5px; }
+    /* Below this a four-across KPI row is four cramped columns rather than four
+       readable ones, so let rows wrap instead of compressing every cell. */
+    [data-testid="stHorizontalBlock"] { flex-wrap: wrap; row-gap: .9rem; }
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { min-width: 45%; }
+}
 @media (max-width: 640px) {
     html { font-size: 16px; }
     .main .block-container { padding-top: 1.25rem; }
