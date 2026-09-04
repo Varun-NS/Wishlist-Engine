@@ -2275,11 +2275,12 @@ if nav == "How it works":
         "Run the classification prompt on any raw review. The result is written to the dataset and every chart refreshes.",
         "flask",
     ):
+        # A save motive and a current blocker that are different buckets, which is
+        # the distinction the whole taxonomy turns on: authenticity is why it was
+        # saved, size is what is stopping the purchase now.
         sample_text = (
-            "I have like 40 things in my Myntra wishlist. There's this one kurta "
-            "I've been eyeing for two months but I'm a size M in some brands and L "
-            "in others so I keep putting it off. Ended up checking Amazon to see if "
-            "the same brand had a size guide there."
+            "i wanted to buy this but not sure of the authenticity so i put it in "
+            "wishlist , but now i am not sure of the size"
         )
 
         input_text = st.text_area("Customer review or conversation", value=sample_text)
