@@ -974,6 +974,31 @@ def bridge_secrets():
 
 bridge_secrets()
 
+
+@st.cache_resource
+def provider_status():
+    """Which LLM providers actually initialise here, and why not.
+
+    The router prefers Gemini and silently drops to Groq when Gemini cannot
+    start. That silence hid a deployment running entirely on the fallback for
+    want of one secret, so the reason is surfaced in the UI instead.
+    """
+    from llm import GeminiProvider, GroqProvider, ProviderError
+
+    out = {}
+    for cls in (GeminiProvider, GroqProvider):
+        try:
+            cls()
+            out[cls.name] = None
+        except ProviderError as e:
+            out[cls.name] = str(e)
+        except Exception as e:
+            # Never surface a raw exception: a client constructor can carry the
+            # key it was handed. The type alone is enough to act on.
+            out[cls.name] = type(e).__name__
+    return out
+
+
 # ------------------------------------------------------------------
 # Bucket accounting
 # ------------------------------------------------------------------
@@ -1997,6 +2022,13 @@ if nav == "AI copilot":
         f"Any research or product question, put to the {len(rel):,} classified customer signals.",
         "spark",
     ):
+        _gem = provider_status().get("gemini")
+        if _gem:
+            st.caption(
+                f":material/warning: Gemini is not configured here ({html.escape(_gem)}), so answers "
+                "come from the Groq fallback. Add `GEMINI_API_KEY` to the app's secrets to use Gemini."
+            )
+
         q1, q2, q3 = st.columns(3, gap="small")
         q1.button(
             "Footwear sizing hesitation",
@@ -2153,6 +2185,15 @@ When the question IS answerable from the signals, use these exact headings (no e
                         "spark",
                     ):
                         st.markdown(answer)
+                        # Gemini is the preferred model. If this call came from the
+                        # fallback, name the reason - a quota or billing failure is
+                        # otherwise invisible and looks like a deliberate choice.
+                        why = router.skipped.get("gemini")
+                        if why:
+                            st.caption(
+                                ":material/warning: Gemini was unavailable for this call, so Groq "
+                                f"answered it. Reason: {html.escape(why[:200])}"
+                            )
 
                     if refused:
                         st.stop()

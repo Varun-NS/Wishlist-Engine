@@ -197,6 +197,7 @@ class LLMRouter:
     def __init__(self, verbose=True):
         self.verbose = verbose
         self.providers = []
+        self.skipped = {}
         self.stats = {"gemini": 0, "groq": 0, "failed": 0}
 
         for cls in (GeminiProvider, GroqProvider):
@@ -218,6 +219,10 @@ class LLMRouter:
 
     def complete(self, system_prompt, user_prompt, max_tokens=8000, json_mode=True):
         errors = []
+        # Why each preferred provider was passed over on this call. A silent
+        # fallback once left a deployment answering entirely from the backup
+        # provider, so callers can now read the reason and say so.
+        self.skipped = {}
 
         for provider in self.providers:
             try:
@@ -226,6 +231,7 @@ class LLMRouter:
                 return result, provider.name
             except ProviderError as e:
                 errors.append(str(e))
+                self.skipped[provider.name] = str(e)
                 if self.verbose:
                     print(f"    ({provider.name} failed, trying next)")
                 continue
